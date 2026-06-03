@@ -1,0 +1,36 @@
+{
+  "name": "codex-cx",
+  "version": "0.1.0",
+  "description": "Small account-switching wrappers for the OpenAI Codex CLI.",
+  "license": "MIT",
+  "author": "rmqg",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rmqg/codex-cx.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rmqg/codex-cx/issues"
+  },
+  "homepage": "https://github.com/rmqg/codex-cx#readme",
+  "type": "commonjs",
+  "bin": {
+    "cx": "./bin/cx",
+    "cxa": "./bin/cxa",
+    "cxr": "./bin/cxr"
+  },
+  "files": [
+    "bin"
+  ],
+  "scripts": {
+    "test": "node --check bin/cx && sh -n bin/cxa && sh -n bin/cxr"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "codex",
+    "openai",
+    "cli",
+    "account-switcher"
+  ]
+}

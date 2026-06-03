@@ -1,0 +1,631 @@
+#!/usr/bin/env node
+"use strict";
+
+const { spawn } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const home = os.homedir();
+const defaultAccounts = [
+  { name: "account1", home: path.join(home, ".codex-account1") },
+  { name: "account2", home: path.join(home, ".codex-account2") },
+  { name: "account3", home: path.join(home, ".codex-account3") },
+];
+
+const timeoutMs = Number(process.env.CX_LIMIT_TIMEOUT_MS || 15000);
+const primarySimilarDelta = Number(process.env.CX_PRIMARY_SIMILAR_DELTA || 20);
+const autoMaxSwitches = Number(process.env.CX_AUTO_MAX_SWITCHES || 5);
+const rateLimitPattern = /Turn error:.*(?:usage limit|rate limit|limit reached|429)|You've hit your usage limit/i;
+const lockDir = path.join(os.tmpdir(), "cx-codex-account-locks");
+
+let activeChild = null;
+let terminating = false;
+
+function usage() {
+  console.log(`Usage:
+  cx [codex args...]
+  cx exec "prompt"
+  cx status
+  cx auto [codex args...]
+  cx --account 2 [codex args...]
+  cx --dry-run [codex args...]
+  cx --no-bypass [codex args...]
+
+Environment:
+  CX_ACCOUNT=1|2|3|account1|account2|account3   Force first account.
+  CX_NO_BYPASS=1                                Do not add the bypass flag.
+  CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
+  CX_PRIMARY_SIMILAR_DELTA=20                   If 5h usage differs by <= this, compare weekly usage.
+  CX_AUTO_MAX_SWITCHES=5                        Max automatic account switches per run.
+  CX_ALLOW_ACTIVE_ACCOUNT=1                     Allow selecting an account already running Codex.`);
+}
+
+function parseArgs(argv) {
+  const codexArgs = [];
+  const options = {
+    auto: false,
+    status: false,
+    dryRun: false,
+    noBypass: process.env.CX_NO_BYPASS === "1",
+    account: process.env.CX_ACCOUNT || null,
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "-h" || arg === "--help") {
+      usage();
+      process.exit(0);
+    }
+    if (arg === "auto" || arg === "--auto" || arg === "--auto-switch") {
+      options.auto = true;
+      continue;
+    }
+    if (arg === "status" || arg === "--status") {
+      options.status = true;
+      continue;
+    }
+    if (arg === "--dry-run") {
+      options.dryRun = true;
+      continue;
+    }
+    if (arg === "--no-bypass") {
+      options.noBypass = true;
+      continue;
+    }
+    if (arg === "--account") {
+      options.account = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--account=")) {
+      options.account = arg.slice("--account=".length);
+      continue;
+    }
+    codexArgs.push(arg);
+  }
+
+  return { options, codexArgs };
+}
+
+function accountMatches(account, selector) {
+  if (!selector) {
+    return false;
+  }
+  const normalized = String(selector).trim().toLowerCase();
+  return (
+    normalized === account.name.toLowerCase() ||
+    normalized === account.name.replace(/^account/, "") ||
+    normalized === path.basename(account.home).replace(/^\.codex-account/, "")
+  );
+}
+
+function readRateLimits(account) {
+  return new Promise((resolve) => {
+    const authPath = path.join(account.home, "auth.json");
+    if (!fs.existsSync(authPath)) {
+      resolve({ account, ok: false, error: `missing ${authPath}` });
+      return;
+    }
+
+    const env = { ...process.env, CODEX_HOME: account.home };
+    delete env.CODEX_THREAD_ID;
+
+    const child = spawn("codex", ["app-server", "--listen", "stdio://"], {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let buffer = "";
+    let stderr = "";
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      finish({ account, ok: false, error: `timeout after ${timeoutMs}ms` });
+    }, timeoutMs);
+
+    function finish(result) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (!child.killed) {
+        child.kill("SIGTERM");
+      }
+      resolve(result);
+    }
+
+    function send(message) {
+      child.stdin.write(`${JSON.stringify(message)}\n`);
+    }
+
+    child.on("error", (error) => finish({ account, ok: false, error: error.message }));
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 4000) {
+        stderr = stderr.slice(-4000);
+      }
+    });
+    child.on("exit", (code) => {
+      if (!settled && code !== 0) {
+        finish({ account, ok: false, error: stderr.trim() || `codex app-server exited ${code}` });
+      }
+    });
+    child.stdout.on("data", (chunk) => {
+      buffer += chunk.toString();
+
+      for (;;) {
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) {
+          break;
+        }
+
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (!line) {
+          continue;
+        }
+
+        let message;
+        try {
+          message = JSON.parse(line);
+        } catch (error) {
+          finish({ account, ok: false, error: `invalid JSON-RPC response: ${error.message}` });
+          return;
+        }
+
+        if (message.id === "init") {
+          send({ id: "limits", method: "account/rateLimits/read", params: null });
+          continue;
+        }
+
+        if (message.id === "limits") {
+          if (message.error) {
+            finish({ account, ok: false, error: message.error.message || "rate-limit read failed" });
+          } else {
+            finish({ account, ok: true, limits: extractCodexLimit(message.result) });
+          }
+          return;
+        }
+      }
+    });
+
+    send({
+      id: "init",
+      method: "initialize",
+      params: {
+        clientInfo: { name: "cx", version: "0.2.0" },
+        capabilities: { experimentalApi: true },
+      },
+    });
+  });
+}
+
+function extractCodexLimit(result) {
+  return (
+    result?.rateLimitsByLimitId?.codex ||
+    result?.rateLimits ||
+    Object.values(result?.rateLimitsByLimitId || {})[0] ||
+    null
+  );
+}
+
+function usedPercent(limit, key) {
+  const camelValue = limit?.[key]?.usedPercent;
+  if (Number.isFinite(camelValue)) {
+    return camelValue;
+  }
+  const snakeValue = limit?.[key]?.used_percent;
+  return Number.isFinite(snakeValue) ? snakeValue : 100;
+}
+
+function reached(limit) {
+  if (!limit) {
+    return "unknown";
+  }
+  return limit.rateLimitReachedType || limit.rate_limit_reached_type || "";
+}
+
+function isUsable(result) {
+  return Boolean(result?.ok && result.limits && !reached(result.limits));
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getLockedAccountNames() {
+  const names = new Set();
+  try {
+    for (const file of fs.readdirSync(lockDir)) {
+      if (!file.endsWith(".lock")) {
+        continue;
+      }
+      const name = file.slice(0, -".lock".length);
+      const pid = Number(fs.readFileSync(path.join(lockDir, file), "utf8").trim());
+      if (Number.isInteger(pid) && pidAlive(pid)) {
+        names.add(name);
+      } else {
+        fs.rmSync(path.join(lockDir, file), { force: true });
+      }
+    }
+  } catch {
+    // No lock directory yet.
+  }
+  return names;
+}
+
+function getProcessActiveAccountNames() {
+  const names = new Set();
+  let pids;
+  try {
+    pids = fs.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry));
+  } catch {
+    return names;
+  }
+
+  for (const pid of pids) {
+    try {
+      const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+      const command = cmdline.join(" ");
+      if (!command.includes("codex") || command.includes("app-server")) {
+        continue;
+      }
+      const environ = fs.readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").filter(Boolean);
+      const codexHome = environ
+        .map((entry) => entry.match(/^CODEX_HOME=(.*)$/))
+        .find(Boolean)?.[1];
+      if (!codexHome) {
+        continue;
+      }
+      const account = defaultAccounts.find((candidate) => candidate.home === codexHome);
+      if (account) {
+        names.add(account.name);
+      }
+    } catch {
+      // Processes can exit while we scan /proc.
+    }
+  }
+
+  return names;
+}
+
+function getActiveAccountNames() {
+  return new Set([...getLockedAccountNames(), ...getProcessActiveAccountNames()]);
+}
+
+function createAccountLock(account) {
+  fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+  const file = path.join(lockDir, `${account.name}.lock`);
+  fs.writeFileSync(file, `${process.pid}\n`, { mode: 0o600 });
+  return () => {
+    try {
+      const current = fs.readFileSync(file, "utf8").trim();
+      if (current === String(process.pid)) {
+        fs.rmSync(file, { force: true });
+      }
+    } catch {
+      // Already removed.
+    }
+  };
+}
+
+function compareResults(a, b) {
+  const aUsable = isUsable(a);
+  const bUsable = isUsable(b);
+  if (aUsable !== bUsable) {
+    return aUsable ? -1 : 1;
+  }
+
+  if (a.active !== b.active) {
+    return a.active ? 1 : -1;
+  }
+
+  const aPrimary = usedPercent(a.limits, "primary");
+  const bPrimary = usedPercent(b.limits, "primary");
+  const primaryDelta = aPrimary - bPrimary;
+  if (Math.abs(primaryDelta) > primarySimilarDelta) {
+    return primaryDelta;
+  }
+
+  const aSecondary = usedPercent(a.limits, "secondary");
+  const bSecondary = usedPercent(b.limits, "secondary");
+  const secondaryDelta = aSecondary - bSecondary;
+  if (secondaryDelta !== 0) {
+    return secondaryDelta;
+  }
+
+  if (primaryDelta !== 0) {
+    return primaryDelta;
+  }
+
+  return a.account.name.localeCompare(b.account.name);
+}
+
+function formatPercent(value) {
+  return `${Number.isFinite(value) ? value : 100}%`;
+}
+
+function printStatus(results) {
+  console.error(`Selection rule: compare 5h first; if 5h differs by <= ${primarySimilarDelta}%, compare weekly.`);
+  console.error("Account   active   5h used   weekly used   reached   home");
+  for (const result of results.slice().sort(compareResults)) {
+    const limit = result.limits;
+    const active = result.active ? "yes" : "-";
+    const primary = result.ok ? formatPercent(usedPercent(limit, "primary")) : "ERR";
+    const secondary = result.ok ? formatPercent(usedPercent(limit, "secondary")) : "ERR";
+    const hit = result.ok ? reached(limit) || "-" : result.error;
+    console.error(
+      `${result.account.name.padEnd(9)} ${active.padEnd(8)} ${primary.padEnd(9)} ${secondary.padEnd(13)} ${String(hit).padEnd(9)} ${result.account.home}`,
+    );
+  }
+}
+
+function hasSafetyOverride(args) {
+  return args.some((arg) =>
+    arg === "--dangerously-bypass-approvals-and-sandbox" ||
+    arg === "--sandbox" ||
+    arg.startsWith("--sandbox=") ||
+    arg === "--approval-policy" ||
+    arg.startsWith("--approval-policy=") ||
+    arg === "-s" ||
+    arg === "-a"
+  );
+}
+
+function baseGlobalArgs(options, codexArgs, extraGlobalArgs = []) {
+  const globalArgs = [];
+  if (!options.noBypass && !hasSafetyOverride(codexArgs)) {
+    globalArgs.push("--dangerously-bypass-approvals-and-sandbox");
+  }
+  return [...globalArgs, ...extraGlobalArgs];
+}
+
+function selectResult(results, forcedAccount = null) {
+  if (forcedAccount) {
+    const forcedResult = results.find((result) => result.account.name === forcedAccount.name);
+    if (forcedResult && isUsable(forcedResult) && !forcedResult.active) {
+      return forcedResult;
+    }
+  }
+  return results.slice().sort(compareResults)[0] || null;
+}
+
+async function probeAccounts(excludedNames = new Set(), options = {}) {
+  const activeNames = options.activeNames || getActiveAccountNames();
+  let accounts = defaultAccounts.filter((account) => !excludedNames.has(account.name));
+  if (options.avoidActive !== false && process.env.CX_ALLOW_ACTIVE_ACCOUNT !== "1") {
+    const inactiveAccounts = accounts.filter((account) => !activeNames.has(account.name));
+    if (inactiveAccounts.length > 0) {
+      accounts = inactiveAccounts;
+    }
+  }
+  const results = await Promise.all(accounts.map(readRateLimits));
+  for (const result of results) {
+    result.active = activeNames.has(result.account.name);
+  }
+  return results;
+}
+
+function describeSelection(result, prefix = "cx") {
+  const limit = result.limits;
+  console.error(
+    `[${prefix}] selected ${result.account.name}: 5h used ${formatPercent(usedPercent(limit, "primary"))}, ` +
+      `weekly used ${formatPercent(usedPercent(limit, "secondary"))}`,
+  );
+}
+
+function shellQuote(value) {
+  if (/^[A-Za-z0-9_./:=+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function installSignalForwarding() {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.on(signal, () => {
+      terminating = true;
+      if (activeChild && !activeChild.killed) {
+        activeChild.kill(signal);
+      }
+    });
+  }
+}
+
+function restoreTerminal() {
+  if (process.stdout.isTTY) {
+    process.stdout.write("\x1b[?1049l\x1b[?25h\x1b[0m\n");
+  }
+}
+
+function runCodex(account, commandArgs) {
+  return new Promise((resolve) => {
+    const env = { ...process.env, CODEX_HOME: account.home };
+    delete env.CODEX_THREAD_ID;
+
+    const cleanupLock = createAccountLock(account);
+    const child = spawn("codex", commandArgs, { env, stdio: "inherit" });
+    activeChild = child;
+    child.on("exit", (code, signal) => {
+      cleanupLock();
+      activeChild = null;
+      resolve({ code, signal });
+    });
+  });
+}
+
+function runCodexMonitored(account, commandArgs, logDir) {
+  return new Promise((resolve) => {
+    const env = { ...process.env, CODEX_HOME: account.home };
+    delete env.CODEX_THREAD_ID;
+
+    const cleanupLock = createAccountLock(account);
+    const child = spawn("codex", commandArgs, { env, stdio: "inherit" });
+    activeChild = child;
+
+    const logFile = path.join(logDir, "codex-tui.log");
+    let offset = 0;
+    let rateLimited = false;
+    let settled = false;
+
+    function finish(result) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearInterval(timer);
+      cleanupLock();
+      activeChild = null;
+      resolve(result);
+    }
+
+    function scanLog() {
+      try {
+        const stat = fs.statSync(logFile);
+        if (stat.size <= offset) {
+          return;
+        }
+        const length = stat.size - offset;
+        const fd = fs.openSync(logFile, "r");
+        const buffer = Buffer.alloc(Math.min(length, 128 * 1024));
+        fs.readSync(fd, buffer, 0, buffer.length, offset);
+        fs.closeSync(fd);
+        offset = stat.size;
+
+        const chunk = buffer.toString("utf8");
+        if (rateLimitPattern.test(chunk)) {
+          rateLimited = true;
+          console.error("\n[cx-auto] usage limit detected; switching account...");
+          if (!child.killed) {
+            child.kill("SIGTERM");
+            setTimeout(() => {
+              if (!settled && !child.killed) {
+                child.kill("SIGKILL");
+              }
+            }, 3000);
+          }
+        }
+      } catch {
+        // The log file may not exist until Codex finishes initialization.
+      }
+    }
+
+    const timer = setInterval(scanLog, 1000);
+    child.on("exit", (code, signal) => {
+      scanLog();
+      finish({ code, signal, rateLimited });
+    });
+  });
+}
+
+async function runSingle(options, codexArgs, forced) {
+  const results = await probeAccounts(new Set(), { avoidActive: options.status ? false : true });
+
+  if (options.status) {
+    printStatus(results);
+    return 0;
+  }
+
+  const selected = selectResult(results, forced);
+  if (!selected || !isUsable(selected)) {
+    printStatus(results);
+    console.error("[cx] No usable Codex account found.");
+    return 1;
+  }
+
+  describeSelection(selected);
+
+  const commandArgs = [...baseGlobalArgs(options, codexArgs), ...codexArgs];
+  if (options.dryRun) {
+    console.error(`CODEX_HOME=${selected.account.home} codex ${commandArgs.map(shellQuote).join(" ")}`);
+    return 0;
+  }
+
+  const result = await runCodex(selected.account, commandArgs);
+  if (result.signal && terminating) {
+    return 130;
+  }
+  return result.code ?? 1;
+}
+
+async function runAuto(options, initialArgs, forced) {
+  const exhausted = new Set();
+  let codexArgs = [...initialArgs];
+  let firstRun = true;
+  let switches = 0;
+
+  for (;;) {
+    const results = await probeAccounts(exhausted);
+    const selected = selectResult(results, firstRun ? forced : null);
+    firstRun = false;
+
+    if (!selected || !isUsable(selected)) {
+      printStatus(results);
+      console.error("[cx-auto] No usable Codex account found.");
+      return 1;
+    }
+
+    const logDir = fs.mkdtempSync(path.join(os.tmpdir(), `cx-auto-${selected.account.name}-`));
+    fs.chmodSync(logDir, 0o700);
+    const logConfigArg = `log_dir=${JSON.stringify(logDir)}`;
+    const commandArgs = [...baseGlobalArgs(options, codexArgs, ["-c", logConfigArg]), ...codexArgs];
+
+    describeSelection(selected, "cx-auto");
+
+    if (options.dryRun) {
+      console.error(`CODEX_HOME=${selected.account.home} codex ${commandArgs.map(shellQuote).join(" ")}`);
+      return 0;
+    }
+
+    const result = await runCodexMonitored(selected.account, commandArgs, logDir);
+    if (terminating) {
+      return result.code ?? 130;
+    }
+
+    if (!result.rateLimited) {
+      return result.code ?? 0;
+    }
+
+    restoreTerminal();
+    exhausted.add(selected.account.name);
+    switches += 1;
+
+    if (switches > autoMaxSwitches) {
+      console.error(`[cx-auto] Switch limit reached (${autoMaxSwitches}).`);
+      return 1;
+    }
+
+    codexArgs = ["resume", "--last"];
+  }
+}
+
+async function main() {
+  installSignalForwarding();
+
+  const { options, codexArgs } = parseArgs(process.argv.slice(2));
+  const forced = options.account
+    ? defaultAccounts.find((account) => accountMatches(account, options.account))
+    : null;
+
+  if (options.account && !forced) {
+    console.error(`[cx] Unknown account: ${options.account}`);
+    process.exit(2);
+  }
+
+  const code = options.auto
+    ? await runAuto(options, codexArgs, forced)
+    : await runSingle(options, codexArgs, forced);
+  process.exit(code);
+}
+
+main().catch((error) => {
+  console.error(`[cx] ${error.stack || error.message}`);
+  process.exit(1);
+});
