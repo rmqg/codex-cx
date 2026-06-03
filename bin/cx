@@ -15,6 +15,8 @@ const defaultAccounts = [
 
 const timeoutMs = Number(process.env.CX_LIMIT_TIMEOUT_MS || 15000);
 const autoMaxSwitches = Number(process.env.CX_AUTO_MAX_SWITCHES || 5);
+const weeklySimilarDelta = 5;
+const primarySimilarDelta = 20;
 const rateLimitPattern = /Turn error:.*(?:usage limit|rate limit|limit reached|429)|You've hit your usage limit/i;
 
 let activeChild = null;
@@ -316,19 +318,27 @@ function compareAccountResults(a, b) {
   const aSecondary = usedPercent(a.limits, "secondary");
   const bSecondary = usedPercent(b.limits, "secondary");
   const secondaryDelta = aSecondary - bSecondary;
-  if (secondaryDelta !== 0) {
+  if (Math.abs(secondaryDelta) > weeklySimilarDelta) {
     return secondaryDelta;
   }
 
   const aPrimary = usedPercent(a.limits, "primary");
   const bPrimary = usedPercent(b.limits, "primary");
   const primaryDelta = aPrimary - bPrimary;
-  if (primaryDelta !== 0) {
+  if (Math.abs(primaryDelta) > primarySimilarDelta) {
     return primaryDelta;
   }
 
   if (a.active !== b.active) {
     return a.active ? 1 : -1;
+  }
+
+  if (primaryDelta !== 0) {
+    return primaryDelta;
+  }
+
+  if (secondaryDelta !== 0) {
+    return secondaryDelta;
   }
 
   return a.account.name.localeCompare(b.account.name);
@@ -339,7 +349,10 @@ function formatPercent(value) {
 }
 
 function printStatus(results) {
-  console.error("Selection rule: compare weekly first; use 5h usage as the tie-breaker; exhausted accounts are skipped.");
+  console.error(
+    `Selection rule: weekly delta > ${weeklySimilarDelta}% wins; within ${weeklySimilarDelta}% use 5h; ` +
+      `5h delta <= ${primarySimilarDelta}% prefers inactive accounts; exhausted accounts are skipped.`,
+  );
   console.error("Account   active   5h used   weekly used   reached   home");
   for (const result of results.slice().sort(compareAccountResults)) {
     const limit = result.limits;

@@ -24,38 +24,44 @@ function account(name, primary, secondary, options = {}) {
     account("account3", 20, 30),
   ]);
 
-  assert.equal(selected.account.name, "account2", "weekly usage is the primary selection key");
+  assert.equal(selected.account.name, "account2", "weekly usage wins when the gap is above 5%");
 }
 
 {
   const selected = selectResult([
-    account("account1", 20, 70, { active: true }),
-    account("account2", 30, 20, { active: true }),
-    account("account3", 10, 30, { active: true }),
+    account("account1", 80, 10),
+    account("account2", 20, 14),
   ]);
 
-  assert.equal(selected.account.name, "account2", "active accounts remain selectable");
-}
-
-{
-  const exhausted = account("account3", 0, 0, { reached: "primary" });
-  const selected = selectResult([
-    account("account1", 20, 50, { active: true }),
-    account("account2", 30, 60, { active: true }),
-    exhausted,
-  ]);
-
-  assert.equal(isUsable(exhausted), false);
-  assert.equal(selected.account.name, "account1", "usable active accounts beat an inactive exhausted account");
+  assert.equal(selected.account.name, "account2", "5h usage wins when weekly usage is within 5%");
 }
 
 {
   const selected = selectResult([
-    account("account1", 40, 20),
-    account("account2", 10, 20),
+    account("account1", 10, 10, { active: true }),
+    account("account2", 29, 14),
   ]);
 
-  assert.equal(selected.account.name, "account2", "5h usage breaks weekly ties");
+  assert.equal(selected.account.name, "account2", "inactive account wins when weekly and 5h gaps are both within thresholds");
+}
+
+{
+  const selected = selectResult([
+    account("account1", 10, 10, { active: true }),
+    account("account2", 31, 14),
+  ]);
+
+  assert.equal(selected.account.name, "account1", "5h usage wins when the 5h gap is above 20%");
+}
+
+{
+  const selected = selectResult([
+    account("account1", 30, 30, { active: true }),
+    account("account2", 30, 30),
+    account("account3", 30, 30),
+  ]);
+
+  assert.equal(selected.account.name, "account2", "account name breaks ties after active state");
 }
 
 {
@@ -80,10 +86,13 @@ function account(name, primary, secondary, options = {}) {
 }
 
 {
+  const exhausted = account("account3", 0, 0, { reached: "primary" });
   const selected = selectResult([
-    account("account1", 20, 30, { active: true }),
-    account("account2", 20, 30),
+    account("account1", 20, 50, { active: true }),
+    account("account2", 30, 60, { active: true }),
+    exhausted,
   ]);
 
-  assert.equal(selected.account.name, "account2", "active state is only a final tie-breaker");
+  assert.equal(isUsable(exhausted), false);
+  assert.equal(selected.account.name, "account1", "usable active accounts beat an inactive exhausted account");
 }
