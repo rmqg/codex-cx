@@ -1,6 +1,6 @@
 {
   "name": "codex-cx",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Small account-switching wrappers for the OpenAI Codex CLI.",
   "license": "MIT",
   "author": "rmqg",

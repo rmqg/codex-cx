@@ -16,7 +16,6 @@ const defaultAccounts = [
 const timeoutMs = Number(process.env.CX_LIMIT_TIMEOUT_MS || 15000);
 const autoMaxSwitches = Number(process.env.CX_AUTO_MAX_SWITCHES || 5);
 const rateLimitPattern = /Turn error:.*(?:usage limit|rate limit|limit reached|429)|You've hit your usage limit/i;
-const lockDir = path.join(os.tmpdir(), "cx-codex-account-locks");
 
 let activeChild = null;
 let terminating = false;
@@ -73,6 +72,11 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--account") {
+      if (!argv[i + 1] || argv[i + 1].startsWith("-")) {
+        const error = new Error("--account requires 1, 2, 3, account1, account2, or account3");
+        error.exitCode = 2;
+        throw error;
+      }
       options.account = argv[i + 1];
       options.accountExplicit = true;
       i += 1;
@@ -213,12 +217,17 @@ function extractCodexLimit(result) {
 }
 
 function usedPercent(limit, key) {
+  const value = rawUsedPercent(limit, key);
+  return Number.isFinite(value) ? value : 100;
+}
+
+function rawUsedPercent(limit, key) {
   const camelValue = limit?.[key]?.usedPercent;
   if (Number.isFinite(camelValue)) {
     return camelValue;
   }
   const snakeValue = limit?.[key]?.used_percent;
-  return Number.isFinite(snakeValue) ? snakeValue : 100;
+  return Number.isFinite(snakeValue) ? snakeValue : null;
 }
 
 function reached(limit) {
@@ -228,38 +237,34 @@ function reached(limit) {
   return limit.rateLimitReachedType || limit.rate_limit_reached_type || "";
 }
 
+function limitExhaustedReason(result) {
+  if (!result?.ok) {
+    return result?.error || "probe failed";
+  }
+  if (!result.limits) {
+    return "missing limits";
+  }
+
+  const reachedType = reached(result.limits);
+  if (reachedType) {
+    return reachedType;
+  }
+
+  const primary = rawUsedPercent(result.limits, "primary");
+  if (Number.isFinite(primary) && primary >= 100) {
+    return "5h>=100%";
+  }
+
+  const secondary = rawUsedPercent(result.limits, "secondary");
+  if (Number.isFinite(secondary) && secondary >= 100) {
+    return "weekly>=100%";
+  }
+
+  return "";
+}
+
 function isUsable(result) {
-  return Boolean(result?.ok && result.limits && !reached(result.limits));
-}
-
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function getLockedAccountNames() {
-  const names = new Set();
-  try {
-    for (const file of fs.readdirSync(lockDir)) {
-      if (!file.endsWith(".lock")) {
-        continue;
-      }
-      const name = file.slice(0, -".lock".length);
-      const pid = Number(fs.readFileSync(path.join(lockDir, file), "utf8").trim());
-      if (Number.isInteger(pid) && pidAlive(pid)) {
-        names.add(name);
-      } else {
-        fs.rmSync(path.join(lockDir, file), { force: true });
-      }
-    }
-  } catch {
-    // No lock directory yet.
-  }
-  return names;
+  return Boolean(result?.ok && result.limits && !limitExhaustedReason(result));
 }
 
 function getProcessActiveAccountNames() {
@@ -298,23 +303,7 @@ function getProcessActiveAccountNames() {
 }
 
 function getActiveAccountNames() {
-  return new Set([...getLockedAccountNames(), ...getProcessActiveAccountNames()]);
-}
-
-function createAccountLock(account) {
-  fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
-  const file = path.join(lockDir, `${account.name}.lock`);
-  fs.writeFileSync(file, `${process.pid}\n`, { mode: 0o600 });
-  return () => {
-    try {
-      const current = fs.readFileSync(file, "utf8").trim();
-      if (current === String(process.pid)) {
-        fs.rmSync(file, { force: true });
-      }
-    } catch {
-      // Already removed.
-    }
-  };
+  return getProcessActiveAccountNames();
 }
 
 function compareAccountResults(a, b) {
@@ -338,6 +327,10 @@ function compareAccountResults(a, b) {
     return primaryDelta;
   }
 
+  if (a.active !== b.active) {
+    return a.active ? 1 : -1;
+  }
+
   return a.account.name.localeCompare(b.account.name);
 }
 
@@ -346,14 +339,14 @@ function formatPercent(value) {
 }
 
 function printStatus(results) {
-  console.error("Selection rule: compare weekly first; use 5h usage as the tie-breaker; locked accounts remain eligible.");
+  console.error("Selection rule: compare weekly first; use 5h usage as the tie-breaker; exhausted accounts are skipped.");
   console.error("Account   active   5h used   weekly used   reached   home");
   for (const result of results.slice().sort(compareAccountResults)) {
     const limit = result.limits;
     const active = result.active ? "yes" : "-";
     const primary = result.ok ? formatPercent(usedPercent(limit, "primary")) : "ERR";
     const secondary = result.ok ? formatPercent(usedPercent(limit, "secondary")) : "ERR";
-    const hit = result.ok ? reached(limit) || "-" : result.error;
+    const hit = limitExhaustedReason(result) || "-";
     console.error(
       `${result.account.name.padEnd(9)} ${active.padEnd(8)} ${primary.padEnd(9)} ${secondary.padEnd(13)} ${String(hit).padEnd(9)} ${result.account.home}`,
     );
@@ -381,7 +374,7 @@ function baseGlobalArgs(options, codexArgs, extraGlobalArgs = []) {
 }
 
 function selectResult(results) {
-  return results.slice().sort(compareAccountResults)[0] || null;
+  return results.slice().sort(compareAccountResults).find(isUsable) || null;
 }
 
 async function probeAccounts(excludedNames = new Set(), options = {}) {
@@ -431,11 +424,9 @@ function runCodex(account, commandArgs) {
     const env = { ...process.env, CODEX_HOME: account.home };
     delete env.CODEX_THREAD_ID;
 
-    const cleanupLock = createAccountLock(account);
     const child = spawn("codex", commandArgs, { env, stdio: "inherit" });
     activeChild = child;
     child.on("exit", (code, signal) => {
-      cleanupLock();
       activeChild = null;
       resolve({ code, signal });
     });
@@ -447,7 +438,6 @@ function runCodexMonitored(account, commandArgs, logDir) {
     const env = { ...process.env, CODEX_HOME: account.home };
     delete env.CODEX_THREAD_ID;
 
-    const cleanupLock = createAccountLock(account);
     const child = spawn("codex", commandArgs, { env, stdio: "inherit" });
     activeChild = child;
 
@@ -462,7 +452,6 @@ function runCodexMonitored(account, commandArgs, logDir) {
       }
       settled = true;
       clearInterval(timer);
-      cleanupLock();
       activeChild = null;
       resolve(result);
     }
@@ -537,7 +526,7 @@ async function runAuto(options, initialArgs) {
 
     if (!selected || !isUsable(selected)) {
       printStatus(results);
-      console.error("[cx-auto] No usable Codex account found.");
+      console.error("[cx-auto] All candidate accounts are exhausted or unavailable.");
       return 1;
     }
 
@@ -594,8 +583,8 @@ async function main() {
 
 if (require.main === module) {
   main().catch((error) => {
-    console.error(`[cx] ${error.stack || error.message}`);
-    process.exit(1);
+    console.error(`[cx] ${error.exitCode ? error.message : error.stack || error.message}`);
+    process.exit(error.exitCode || 1);
   });
 }
 
@@ -603,6 +592,7 @@ module.exports = {
   accountMatches,
   compareAccountResults,
   isUsable,
+  limitExhaustedReason,
   reached,
   selectResult,
   usedPercent,

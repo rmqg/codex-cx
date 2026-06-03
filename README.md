@@ -69,8 +69,9 @@ CODEX_HOME=~/.codex-account3 codex login
 ## Behavior
 
 - `cx status` prints the detected accounts, active state, recent usage, weekly usage, and account home.
-- Account selection is weekly-first, then 5h usage, then account name.
-- Locked or already-running accounts stay eligible. This means `cxa` can still launch when all accounts are locked, and it can fall back to a locked usable account when unlocked accounts are exhausted.
+- Account selection is weekly-first, then 5h usage, then active state, then account name.
+- Exhausted or unavailable accounts are skipped. If every candidate account is exhausted or unavailable, `cx` exits with an error instead of launching Codex.
+- Already-running accounts stay eligible. `active` is only a tie-breaker after weekly usage and 5h usage.
 - `cx auto` monitors the Codex TUI log for rate-limit errors. If a limit is detected, it terminates the current run, switches accounts, and resumes with `codex resume --last`.
 - `--account 1`, `--account 2`, or `--account 3` runs only that account and disables probing, sorting, and auto-switching.
 - `--dry-run` prints the `CODEX_HOME=... codex ...` command without launching Codex.
@@ -90,7 +91,7 @@ CX_AUTO_MAX_SWITCHES=5
 
 - Node.js 18 or newer
 - OpenAI Codex CLI available as `codex`
-- Linux is recommended. Active account detection reads `/proc`; on platforms without `/proc`, lock-file based detection still works for runs started through `cx`.
+- Linux is recommended. Active account detection reads `/proc`; on platforms without `/proc`, account selection still works but `cx status` may not show active accounts.
 
 ## License
 

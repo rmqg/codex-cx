@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("assert/strict");
-const { isUsable, selectResult } = require("../bin/cx");
+const { isUsable, limitExhaustedReason, selectResult } = require("../bin/cx");
 
 function account(name, primary, secondary, options = {}) {
   return {
@@ -34,7 +34,7 @@ function account(name, primary, secondary, options = {}) {
     account("account3", 10, 30, { active: true }),
   ]);
 
-  assert.equal(selected.account.name, "account2", "all locked accounts remain selectable");
+  assert.equal(selected.account.name, "account2", "active accounts remain selectable");
 }
 
 {
@@ -46,7 +46,7 @@ function account(name, primary, secondary, options = {}) {
   ]);
 
   assert.equal(isUsable(exhausted), false);
-  assert.equal(selected.account.name, "account1", "locked usable accounts beat an unlocked exhausted account");
+  assert.equal(selected.account.name, "account1", "usable active accounts beat an inactive exhausted account");
 }
 
 {
@@ -56,4 +56,34 @@ function account(name, primary, secondary, options = {}) {
   ]);
 
   assert.equal(selected.account.name, "account2", "5h usage breaks weekly ties");
+}
+
+{
+  const exhausted = account("account1", 0, 0, { reached: "secondary" });
+  const selected = selectResult([
+    exhausted,
+    account("account2", 70, 20),
+  ]);
+
+  assert.equal(limitExhaustedReason(exhausted), "secondary");
+  assert.equal(selected.account.name, "account2", "exhausted accounts are skipped even when usage would sort first");
+}
+
+{
+  const selected = selectResult([
+    account("account1", 100, 10),
+    account("account2", 20, 100),
+    account("account3", 0, 0, { reached: "primary" }),
+  ]);
+
+  assert.equal(selected, null, "all exhausted accounts return no selection");
+}
+
+{
+  const selected = selectResult([
+    account("account1", 20, 30, { active: true }),
+    account("account2", 20, 30),
+  ]);
+
+  assert.equal(selected.account.name, "account2", "active state is only a final tie-breaker");
 }
