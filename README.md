@@ -19,6 +19,7 @@ npm install -g github:rmqg/codex-cx
 cx [codex args...]
 cxa [codex args...]
 cxr [extra resume args...]
+cx-setup [options]
 ```
 
 License: GPL-3.0-only.

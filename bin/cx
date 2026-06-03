@@ -7,33 +7,133 @@ const os = require("os");
 const path = require("path");
 
 const home = os.homedir();
-const defaultAccounts = [
-  { name: "account1", home: path.join(home, ".codex-account1") },
-  { name: "account2", home: path.join(home, ".codex-account2") },
-  { name: "account3", home: path.join(home, ".codex-account3") },
-];
+const packageVersion = readPackageVersion();
 
 const timeoutMs = Number(process.env.CX_LIMIT_TIMEOUT_MS || 15000);
 const autoMaxSwitches = Number(process.env.CX_AUTO_MAX_SWITCHES || 5);
 const weeklySimilarDelta = 5;
 const primarySimilarDelta = 20;
 const rateLimitPattern = /Turn error:.*(?:usage limit|rate limit|limit reached|429)|You've hit your usage limit/i;
+const defaultAccounts = initializeDefaultAccounts();
+const continuationPrompt =
+  "Continue the interrupted task from the last user instruction in this session. " +
+  "The previous account hit a usage limit before completing the turn; do not ask the user to repeat it.";
+const codexSubcommands = new Set([
+  "exec",
+  "e",
+  "review",
+  "login",
+  "logout",
+  "mcp",
+  "plugin",
+  "mcp-server",
+  "app-server",
+  "remote-control",
+  "completion",
+  "update",
+  "doctor",
+  "sandbox",
+  "debug",
+  "apply",
+  "a",
+  "resume",
+  "archive",
+  "unarchive",
+  "fork",
+  "cloud",
+  "exec-server",
+  "features",
+  "help",
+]);
+const execSubcommands = new Set(["resume", "review", "help"]);
+const globalValueOptions = new Set([
+  "-c",
+  "--config",
+  "--enable",
+  "--disable",
+  "--remote",
+  "--remote-auth-token-env",
+  "-i",
+  "--image",
+  "-m",
+  "--model",
+  "--local-provider",
+  "-p",
+  "--profile",
+  "-s",
+  "--sandbox",
+  "-C",
+  "--cd",
+  "--add-dir",
+  "-a",
+  "--ask-for-approval",
+]);
+const execResumeValueOptions = new Set([
+  "-c",
+  "--config",
+  "--enable",
+  "--disable",
+  "-i",
+  "--image",
+  "-m",
+  "--model",
+  "--local-provider",
+  "-p",
+  "--profile",
+  "--output-schema",
+  "-o",
+  "--output-last-message",
+]);
+const execAnalyzeValueOptions = new Set([...execResumeValueOptions, "--color"]);
+const execResumeSupportedOptions = new Set([
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--dangerously-bypass-hook-trust",
+  "--disable",
+  "--enable",
+  "--ephemeral",
+  "--ignore-rules",
+  "--ignore-user-config",
+  "--json",
+  "--local-provider",
+  "--model",
+  "--oss",
+  "--output-last-message",
+  "--output-schema",
+  "--profile",
+  "--skip-git-repo-check",
+  "--strict-config",
+  "-c",
+  "-i",
+  "-m",
+  "-o",
+  "-p",
+]);
 
 let activeChild = null;
 let terminating = false;
+
+function readPackageVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.0";
+  } catch {
+    return "0.5.0";
+  }
+}
 
 function usage() {
   console.log(`Usage:
   cx [codex args...]                         Auto-select account and auto-switch on limits.
   cx exec "prompt"                           Auto-select account and auto-switch on limits.
   cx auto [codex args...]                    Same as cx without --account.
-  cx --account 2 [codex args...]             Run only with account2.
+  cx --account <selector> [codex args...]    Run only with one selected account.
   cx status
   cx --dry-run [codex args...]
   cx --no-bypass [codex args...]
 
 Environment:
-  CX_ACCOUNT=1|2|3|account1|account2|account3   Same as --account.
+  CX_ACCOUNT=1|account1|work                    Same as --account.
+  CX_ACCOUNT_COUNT=N                            Probe ~/.codex-account1..N.
+  CX_ACCOUNT_HOMES=/path/a,/path/b              Explicit comma-separated CODEX_HOME list.
   CX_NO_BYPASS=1                                Do not add the bypass flag.
   CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
   CX_AUTO_MAX_SWITCHES=5                        Max automatic account switches per run.
@@ -75,7 +175,7 @@ function parseArgs(argv) {
     }
     if (arg === "--account") {
       if (!argv[i + 1] || argv[i + 1].startsWith("-")) {
-        const error = new Error("--account requires 1, 2, 3, account1, account2, or account3");
+        const error = new Error(`--account requires one of: ${accountSelectorHint()}`);
         error.exitCode = 2;
         throw error;
       }
@@ -95,12 +195,147 @@ function parseArgs(argv) {
   return { options, codexArgs };
 }
 
+function parsePositiveInteger(value, fallback, label) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function naturalAccountSort(a, b) {
+  const left = a.suffix.match(/^\d+$/) ? Number(a.suffix) : null;
+  const right = b.suffix.match(/^\d+$/) ? Number(b.suffix) : null;
+  if (left !== null && right !== null) {
+    return left - right;
+  }
+  if (left !== null) {
+    return -1;
+  }
+  if (right !== null) {
+    return 1;
+  }
+  return a.name.localeCompare(b.name);
+}
+
+function expandHomePath(value) {
+  if (value === "~") {
+    return home;
+  }
+  if (value.startsWith("~/")) {
+    return path.join(home, value.slice(2));
+  }
+  return path.resolve(value);
+}
+
+function discoveredAccountName(fileName, index) {
+  const suffix = fileName.slice(".codex-account".length);
+  if (/^\d+$/.test(suffix)) {
+    return `account${suffix}`;
+  }
+  const trimmed = suffix.replace(/^-+/, "");
+  return trimmed || `account${index + 1}`;
+}
+
+function discoverAccountHomes() {
+  let entries;
+  try {
+    entries = fs.readdirSync(home, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  return entries
+    .filter((entry) => entry.name.startsWith(".codex-account") && entry.name !== ".codex-account")
+    .map((entry, index) => ({
+      dirent: entry,
+      name: discoveredAccountName(entry.name, index),
+      suffix: entry.name.slice(".codex-account".length),
+      home: path.join(home, entry.name),
+    }))
+    .filter((account) => {
+      if (account.dirent.isDirectory() || account.dirent.isSymbolicLink()) {
+        return true;
+      }
+      try {
+        return fs.statSync(account.home).isDirectory();
+      } catch {
+        return false;
+      }
+    })
+    .sort(naturalAccountSort)
+    .map(({ name, home: accountHome }) => ({ name, home: accountHome }));
+}
+
+function buildDefaultAccounts() {
+  const homes = process.env.CX_ACCOUNT_HOMES;
+  if (homes) {
+    const accounts = homes
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry, index) => {
+        const equals = entry.indexOf("=");
+        if (equals >= 0) {
+          const name = entry.slice(0, equals).trim() || `account${index + 1}`;
+          const accountHome = entry.slice(equals + 1).trim();
+          if (!accountHome) {
+            throw new Error("CX_ACCOUNT_HOMES entries must include a path");
+          }
+          return { name, home: expandHomePath(accountHome) };
+        }
+        return { name: `account${index + 1}`, home: expandHomePath(entry) };
+      });
+    if (accounts.length < 1) {
+      throw new Error("CX_ACCOUNT_HOMES requires at least one account home");
+    }
+    return accounts;
+  }
+
+  if (process.env.CX_ACCOUNT_COUNT) {
+    const count = parsePositiveInteger(process.env.CX_ACCOUNT_COUNT, null, "CX_ACCOUNT_COUNT");
+    return Array.from({ length: count }, (_, index) => {
+      const number = index + 1;
+      return { name: `account${number}`, home: path.join(home, `.codex-account${number}`) };
+    });
+  }
+
+  return discoverAccountHomes();
+}
+
+function initializeDefaultAccounts() {
+  try {
+    return buildDefaultAccounts();
+  } catch (error) {
+    if (require.main === module) {
+      console.error(`[cx] ${error.message}`);
+      process.exit(2);
+    }
+    throw error;
+  }
+}
+
+function accountSelectorHint() {
+  if (defaultAccounts.length < 1) {
+    return "no accounts configured; run cx-setup --accounts <N> --migrate or set CX_ACCOUNT_HOMES";
+  }
+  const numeric = defaultAccounts.map((_, index) => String(index + 1)).join("|");
+  const names = defaultAccounts.map((account) => account.name).join("|");
+  return `${numeric}|${names}`;
+}
+
 function accountMatches(account, selector) {
   if (!selector) {
     return false;
   }
   const normalized = String(selector).trim().toLowerCase();
+  const index = defaultAccounts.indexOf(account);
   return (
+    (index >= 0 && normalized === String(index + 1)) ||
     normalized === account.name.toLowerCase() ||
     normalized === account.name.replace(/^account/, "") ||
     normalized === path.basename(account.home).replace(/^\.codex-account/, "")
@@ -202,7 +437,7 @@ function readRateLimits(account) {
       id: "init",
       method: "initialize",
       params: {
-        clientInfo: { name: "cx", version: "0.2.0" },
+        clientInfo: { name: "cx", version: packageVersion },
         capabilities: { experimentalApi: true },
       },
     });
@@ -366,6 +601,12 @@ function printStatus(results) {
   }
 }
 
+function printNoAccountsConfigured() {
+  console.error("[cx] No Codex account homes found.");
+  console.error("[cx] On a new machine, run: cx-setup --accounts <N> --migrate");
+  console.error("[cx] Or set: CX_ACCOUNT_HOMES=name=/path/to/codex-home,name2=/path/to/other-home");
+}
+
 function hasSafetyOverride(args) {
   return args.some((arg) =>
     arg === "--dangerously-bypass-approvals-and-sandbox" ||
@@ -388,6 +629,237 @@ function baseGlobalArgs(options, codexArgs, extraGlobalArgs = []) {
 
 function selectResult(results) {
   return results.slice().sort(compareAccountResults).find(isUsable) || null;
+}
+
+function optionName(arg) {
+  const equals = arg.indexOf("=");
+  return equals >= 0 ? arg.slice(0, equals) : arg;
+}
+
+function splitLeadingOptions(args, start, valueOptions) {
+  const options = [];
+  let index = start;
+
+  while (index < args.length) {
+    const arg = args[index];
+    if (arg === "--") {
+      break;
+    }
+    if (!arg.startsWith("-") || arg === "-") {
+      break;
+    }
+
+    options.push(arg);
+    if (!arg.includes("=") && valueOptions.has(optionName(arg)) && index + 1 < args.length) {
+      index += 1;
+      options.push(args[index]);
+    }
+    index += 1;
+  }
+
+  return { options, index };
+}
+
+function filterOptions(args, supportedOptions, valueOptions) {
+  const filtered = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const name = optionName(arg);
+    const supported = supportedOptions.has(name);
+
+    if (supported) {
+      filtered.push(arg);
+    }
+    if (!arg.includes("=") && valueOptions.has(name) && index + 1 < args.length) {
+      index += 1;
+      if (supported) {
+        filtered.push(args[index]);
+      }
+    }
+  }
+  return filtered;
+}
+
+function analyzeCodexArgs(args) {
+  const leading = splitLeadingOptions(args, 0, globalValueOptions);
+  const command = args[leading.index] || null;
+
+  if (command === "exec" || command === "e") {
+    const execOptions = splitLeadingOptions(args, leading.index + 1, execAnalyzeValueOptions);
+    const execCommand = args[execOptions.index] || null;
+    const prompt =
+      execCommand && execSubcommands.has(execCommand) ? null : args.slice(execOptions.index).join(" ") || null;
+    return {
+      mode: "exec",
+      globalArgs: leading.options,
+      resumeOptions: filterOptions(execOptions.options, execResumeSupportedOptions, execAnalyzeValueOptions),
+      prompt,
+    };
+  }
+
+  if (command && codexSubcommands.has(command)) {
+    return {
+      mode: "interactive",
+      globalArgs: leading.options,
+      resumeOptions: [],
+      prompt: null,
+    };
+  }
+
+  return {
+    mode: "interactive",
+    globalArgs: leading.options,
+    resumeOptions: [],
+    prompt: args.slice(leading.index).join(" ") || null,
+  };
+}
+
+function findLatestSessionFile(accountHome, options = {}) {
+  const root = path.join(accountHome, "sessions");
+  const minMtimeMs = options.minMtimeMs || 0;
+  const stack = [root];
+  let latest = null;
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const target = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(target);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+
+      let stat;
+      try {
+        stat = fs.statSync(target);
+      } catch {
+        continue;
+      }
+      if (stat.mtimeMs < minMtimeMs) {
+        continue;
+      }
+      if (!latest || stat.mtimeMs > latest.mtimeMs) {
+        latest = { file: target, mtimeMs: stat.mtimeMs };
+      }
+    }
+  }
+
+  return latest?.file || null;
+}
+
+function latestSessionTurnState(accountHome, options = {}) {
+  const file = findLatestSessionFile(accountHome, options);
+  if (!file) {
+    return { file: null, incomplete: false };
+  }
+
+  const state = {
+    file,
+    activeTurn: false,
+    sawUser: false,
+    sawAssistant: false,
+    sawWork: false,
+    completed: false,
+  };
+
+  let lines;
+  try {
+    lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+  } catch {
+    return { file, incomplete: false };
+  }
+
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    const payload = event.payload || event;
+    if (event.type === "event_msg" && payload.type === "task_started") {
+      state.activeTurn = true;
+      state.sawUser = false;
+      state.sawAssistant = false;
+      state.sawWork = false;
+      state.completed = false;
+      continue;
+    }
+    if (event.type === "event_msg" && payload.type === "task_complete") {
+      state.completed = true;
+      continue;
+    }
+
+    if (!state.activeTurn) {
+      continue;
+    }
+
+    if (event.type === "response_item" && payload.type === "message" && payload.role === "user") {
+      state.sawUser = true;
+    } else if (event.type === "response_item" && payload.type === "message" && payload.role === "assistant") {
+      state.sawAssistant = true;
+    } else if (
+      event.type === "response_item" &&
+      ["function_call", "custom_tool_call", "local_shell_call"].includes(payload.type)
+    ) {
+      state.sawWork = true;
+    } else if (event.type === "event_msg" && payload.type === "agent_message") {
+      state.sawAssistant = true;
+    }
+  }
+
+  return {
+    ...state,
+    incomplete: state.activeTurn && !state.completed && (state.sawUser || state.sawAssistant || state.sawWork),
+  };
+}
+
+function resumeArgsFromAnalysis(analysis, prompt) {
+  if (analysis.mode === "exec") {
+    return [
+      ...analysis.globalArgs,
+      "exec",
+      "resume",
+      ...analysis.resumeOptions,
+      "--last",
+      ...(prompt ? [prompt] : []),
+    ];
+  }
+
+  return [...analysis.globalArgs, "resume", "--last", ...(prompt ? [prompt] : [])];
+}
+
+function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
+  const analysis = analyzeCodexArgs(previousArgs);
+  const sessionState = latestSessionTurnState(accountHome, options);
+
+  if (!sessionState.file) {
+    return [...previousArgs];
+  }
+
+  let prompt = null;
+  if (sessionState.incomplete) {
+    prompt = continuationPrompt;
+  } else if (!sessionState.completed && analysis.prompt) {
+    prompt = analysis.prompt;
+  }
+
+  return resumeArgsFromAnalysis(analysis, prompt);
 }
 
 async function probeAccounts(excludedNames = new Set(), options = {}) {
@@ -527,6 +999,11 @@ async function runAuto(options, initialArgs) {
   let codexArgs = [...initialArgs];
   let switches = 0;
 
+  if (defaultAccounts.length < 1) {
+    printNoAccountsConfigured();
+    return 1;
+  }
+
   if (options.status) {
     const results = await probeAccounts(exhausted);
     printStatus(results);
@@ -555,6 +1032,7 @@ async function runAuto(options, initialArgs) {
       return 0;
     }
 
+    const runStartedAt = Date.now() - 2000;
     const result = await runCodexMonitored(selected.account, commandArgs, logDir);
     if (terminating) {
       return result.code ?? 130;
@@ -573,7 +1051,7 @@ async function runAuto(options, initialArgs) {
       return 1;
     }
 
-    codexArgs = ["resume", "--last"];
+    codexArgs = retryArgsAfterRateLimit(codexArgs, selected.account.home, { minMtimeMs: runStartedAt });
   }
 }
 
@@ -586,7 +1064,12 @@ async function main() {
     : null;
 
   if (options.accountExplicit && !forced) {
-    console.error(`[cx] Unknown account: ${options.account}`);
+    if (defaultAccounts.length < 1) {
+      printNoAccountsConfigured();
+    } else {
+      console.error(`[cx] Unknown account: ${options.account}`);
+      console.error(`[cx] Available selectors: ${accountSelectorHint()}`);
+    }
     process.exit(2);
   }
 
@@ -603,9 +1086,12 @@ if (require.main === module) {
 
 module.exports = {
   accountMatches,
+  analyzeCodexArgs,
   compareAccountResults,
   isUsable,
+  latestSessionTurnState,
   limitExhaustedReason,
+  retryArgsAfterRateLimit,
   reached,
   selectResult,
   usedPercent,

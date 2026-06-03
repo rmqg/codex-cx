@@ -1,0 +1,434 @@
+#!/usr/bin/env node
+"use strict";
+
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const home = os.homedir();
+const defaultSharedItems = [
+  "sessions",
+  "archived_sessions",
+  "memories",
+  "skills",
+  "shell_snapshots",
+  "cache",
+  "generated_images",
+  "history.jsonl",
+  "models_cache.json",
+];
+const fullSharedItems = [
+  ...defaultSharedItems,
+  "log",
+  "goals_1.sqlite",
+  "goals_1.sqlite-shm",
+  "goals_1.sqlite-wal",
+  "logs_2.sqlite",
+  "logs_2.sqlite-shm",
+  "logs_2.sqlite-wal",
+  "memories_1.sqlite",
+  "memories_1.sqlite-shm",
+  "memories_1.sqlite-wal",
+  "state_5.sqlite",
+  "state_5.sqlite-shm",
+  "state_5.sqlite-wal",
+];
+
+function usage() {
+  console.log(`Usage:
+  cx-setup [options]
+
+Options:
+  --accounts N          Create/link ~/.codex-account1..N.
+  --homes LIST          Explicit account homes, comma-separated. Entries can be name=path or path.
+  --home DIR            Shared Codex home. Default: ~/.codex.
+  --prefix NAME         Account directory prefix. Default: ~/.codex-account.
+  --full                Also share Codex state/log sqlite files.
+  --migrate             Merge existing account data into shared home before linking.
+  --force               Replace existing non-symlink account paths with backups before linking.
+  --allow-active        Do not refuse active Codex account homes. Risky with --full.
+  --dry-run             Print actions without changing files.
+
+This never links auth.json. Log in once per account with:
+  CODEX_HOME=~/.codex-accountN codex login`);
+}
+
+function parseArgs(argv) {
+  const options = {
+    accounts: null,
+    homes: null,
+    sharedHome: path.join(home, ".codex"),
+    prefix: path.join(home, ".codex-account"),
+    full: false,
+    migrate: false,
+    force: false,
+    allowActive: false,
+    dryRun: false,
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "-h" || arg === "--help") {
+      usage();
+      process.exit(0);
+    }
+    if (arg === "--full") {
+      options.full = true;
+      continue;
+    }
+    if (arg === "--migrate") {
+      options.migrate = true;
+      continue;
+    }
+    if (arg === "--force") {
+      options.force = true;
+      continue;
+    }
+    if (arg === "--allow-active") {
+      options.allowActive = true;
+      continue;
+    }
+    if (arg === "--dry-run") {
+      options.dryRun = true;
+      continue;
+    }
+    if (arg === "--accounts") {
+      options.accounts = parsePositiveInteger(requiredValue(argv, ++i, arg), arg);
+      continue;
+    }
+    if (arg.startsWith("--accounts=")) {
+      options.accounts = parsePositiveInteger(arg.slice("--accounts=".length), "--accounts");
+      continue;
+    }
+    if (arg === "--homes") {
+      options.homes = parseHomes(requiredValue(argv, ++i, arg));
+      continue;
+    }
+    if (arg.startsWith("--homes=")) {
+      options.homes = parseHomes(arg.slice("--homes=".length));
+      continue;
+    }
+    if (arg === "--home") {
+      options.sharedHome = expandHomePath(requiredValue(argv, ++i, arg));
+      continue;
+    }
+    if (arg.startsWith("--home=")) {
+      options.sharedHome = expandHomePath(arg.slice("--home=".length));
+      continue;
+    }
+    if (arg === "--prefix") {
+      options.prefix = expandHomePath(requiredValue(argv, ++i, arg));
+      continue;
+    }
+    if (arg.startsWith("--prefix=")) {
+      options.prefix = expandHomePath(arg.slice("--prefix=".length));
+      continue;
+    }
+    throw new Error(`Unknown option: ${arg}`);
+  }
+
+  return options;
+}
+
+function requiredValue(argv, index, flag) {
+  const value = argv[index];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
+function parsePositiveInteger(value, label) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function expandHomePath(value) {
+  if (value === "~") {
+    return home;
+  }
+  if (value.startsWith("~/")) {
+    return path.join(home, value.slice(2));
+  }
+  return path.resolve(value);
+}
+
+function naturalAccountSort(a, b) {
+  const left = a.suffix.match(/^\d+$/) ? Number(a.suffix) : null;
+  const right = b.suffix.match(/^\d+$/) ? Number(b.suffix) : null;
+  if (left !== null && right !== null) {
+    return left - right;
+  }
+  if (left !== null) {
+    return -1;
+  }
+  if (right !== null) {
+    return 1;
+  }
+  return a.name.localeCompare(b.name);
+}
+
+function discoveredAccountName(fileName, index) {
+  const suffix = fileName.slice(".codex-account".length);
+  if (/^\d+$/.test(suffix)) {
+    return `account${suffix}`;
+  }
+  const trimmed = suffix.replace(/^-+/, "");
+  return trimmed || `account${index + 1}`;
+}
+
+function discoverAccountHomes() {
+  let entries;
+  try {
+    entries = fs.readdirSync(home, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  return entries
+    .filter((entry) => entry.name.startsWith(".codex-account") && entry.name !== ".codex-account")
+    .map((entry, index) => ({
+      dirent: entry,
+      name: discoveredAccountName(entry.name, index),
+      suffix: entry.name.slice(".codex-account".length),
+      home: path.join(home, entry.name),
+    }))
+    .filter((account) => {
+      if (account.dirent.isDirectory() || account.dirent.isSymbolicLink()) {
+        return true;
+      }
+      try {
+        return fs.statSync(account.home).isDirectory();
+      } catch {
+        return false;
+      }
+    })
+    .sort(naturalAccountSort)
+    .map(({ name, home: accountHome }) => ({ name, home: accountHome }));
+}
+
+function parseHomes(value) {
+  const homes = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry, index) => {
+      const equals = entry.indexOf("=");
+      if (equals >= 0) {
+        const accountHome = entry.slice(equals + 1).trim();
+        if (!accountHome) {
+          throw new Error("--homes entries must include a path");
+        }
+        return {
+          name: entry.slice(0, equals).trim() || `account${index + 1}`,
+          home: expandHomePath(accountHome),
+        };
+      }
+      return { name: `account${index + 1}`, home: expandHomePath(entry) };
+    });
+
+  if (homes.length < 1) {
+    throw new Error("--homes requires at least one account home");
+  }
+  return homes;
+}
+
+function accountHomes(options) {
+  if (options.homes) {
+    return options.homes;
+  }
+  if (options.accounts === null) {
+    return discoverAccountHomes();
+  }
+  return Array.from({ length: options.accounts }, (_, index) => ({
+    name: `account${index + 1}`,
+    home: `${options.prefix}${index + 1}`,
+  }));
+}
+
+function activeCodexHomes() {
+  const active = new Set();
+  let pids;
+  try {
+    pids = fs.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry));
+  } catch {
+    return active;
+  }
+
+  for (const pid of pids) {
+    try {
+      const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+      const command = cmdline.join(" ");
+      if (!command.includes("codex") || command.includes("app-server")) {
+        continue;
+      }
+      const codexHome = fs
+        .readFileSync(`/proc/${pid}/environ`, "utf8")
+        .split("\0")
+        .map((entry) => entry.match(/^CODEX_HOME=(.*)$/))
+        .find(Boolean)?.[1];
+      if (codexHome) {
+        active.add(path.resolve(codexHome));
+      }
+    } catch {
+      // Processes can exit while we scan /proc.
+    }
+  }
+
+  return active;
+}
+
+function backupPath(target) {
+  const stamp = new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14);
+  return `${target}.cx-backup-${stamp}-${process.pid}`;
+}
+
+function ensureDir(dir, options) {
+  if (options.dryRun) {
+    console.log(`[dry-run] mkdir -p ${dir}`);
+    return;
+  }
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function ensureParent(file, options) {
+  ensureDir(path.dirname(file), options);
+}
+
+function isDirectory(target) {
+  try {
+    return fs.statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function copyMerge(source, destination, options) {
+  if (!fs.existsSync(source)) {
+    return;
+  }
+
+  ensureParent(destination, options);
+  const stat = fs.lstatSync(source);
+  if (stat.isSymbolicLink()) {
+    return;
+  }
+  if (stat.isDirectory()) {
+    ensureDir(destination, options);
+    for (const entry of fs.readdirSync(source)) {
+      copyMerge(path.join(source, entry), path.join(destination, entry), options);
+    }
+    return;
+  }
+  if (!fs.existsSync(destination)) {
+    if (options.dryRun) {
+      console.log(`[dry-run] copy ${source} -> ${destination}`);
+    } else {
+      fs.copyFileSync(source, destination);
+    }
+  }
+}
+
+function removeForLink(target, options) {
+  if (!fs.existsSync(target) && !fs.lstatSync(target, { throwIfNoEntry: false })) {
+    return;
+  }
+  const backup = backupPath(target);
+  if (options.dryRun) {
+    console.log(`[dry-run] mv ${target} ${backup}`);
+    return;
+  }
+  fs.renameSync(target, backup);
+}
+
+function linkItem(accountHome, sharedHome, item, options) {
+  const source = path.join(sharedHome, item);
+  const target = path.join(accountHome, item);
+
+  ensureParent(source, options);
+  if (item.endsWith("/") || isDirectory(target) || !path.extname(item)) {
+    ensureDir(source, options);
+  }
+
+  const existing = fs.lstatSync(target, { throwIfNoEntry: false });
+  if (existing?.isSymbolicLink()) {
+    const current = fs.readlinkSync(target);
+    if (path.resolve(path.dirname(target), current) === source) {
+      console.log(`ok ${target} -> ${source}`);
+      return;
+    }
+    if (!options.force) {
+      throw new Error(`${target} is a symlink to ${current}; use --force to replace it`);
+    }
+    removeForLink(target, options);
+  } else if (existing) {
+    if (!options.migrate && !options.force) {
+      throw new Error(`${target} exists; use --migrate to merge it or --force to move it aside`);
+    }
+    if (options.migrate) {
+      copyMerge(target, source, options);
+    }
+    removeForLink(target, options);
+  }
+
+  ensureParent(target, options);
+  if (options.dryRun) {
+    console.log(`[dry-run] ln -s ${source} ${target}`);
+  } else {
+    fs.symlinkSync(source, target);
+  }
+}
+
+function setup(options) {
+  const items = options.full ? fullSharedItems : defaultSharedItems;
+  const homes = accountHomes(options).map((account) => ({ ...account, home: path.resolve(account.home) }));
+  if (homes.length < 1) {
+    throw new Error("No account homes selected. Use --accounts <N> on a new machine, or --homes name=/path,...");
+  }
+  const activeHomes = activeCodexHomes();
+  const activeTargets = homes.filter((account) => activeHomes.has(account.home));
+
+  if (activeTargets.length > 0 && !options.allowActive && !options.dryRun) {
+    throw new Error(
+      `Refusing to modify active Codex homes: ${activeTargets.map((account) => account.home).join(", ")}. ` +
+        "Exit those Codex sessions first, or rerun with --allow-active if you accept the risk.",
+    );
+  }
+
+  ensureDir(options.sharedHome, options);
+
+  for (const { home: accountHome } of homes) {
+    ensureDir(accountHome, options);
+    for (const item of items) {
+      linkItem(accountHome, options.sharedHome, item, options);
+    }
+    console.log(`configured ${accountHome}`);
+  }
+
+  console.log("\nNext steps:");
+  for (const account of homes) {
+    console.log(`  CODEX_HOME=${account.home} codex login`);
+  }
+  console.log("  cx status");
+}
+
+if (require.main === module) {
+  try {
+    setup(parseArgs(process.argv.slice(2)));
+  } catch (error) {
+    console.error(`[cx-setup] ${error.message}`);
+    process.exit(2);
+  }
+}
+
+module.exports = {
+  defaultSharedItems,
+  discoverAccountHomes,
+  fullSharedItems,
+  parseArgs,
+  parseHomes,
+  setup,
+};
