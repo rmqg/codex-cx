@@ -69,6 +69,12 @@ cx resume --last "$@"
 
 `cx --account work ...` is the explicit-account path. It uses only that account and does not probe usage, sort accounts, or auto-switch. Without an explicit account, `cx` uses the same auto-switching path as `cxa`.
 
+Use `--` when an argument must be passed to Codex even though it looks like a `cx` wrapper option:
+
+```sh
+cx --account work -- --dry-run exec "hello"
+```
+
 ## Multiple Accounts
 
 When no account environment variable is set, `cx` auto-discovers existing account homes:
@@ -101,6 +107,8 @@ Use the same homes with setup when you need shared sessions for custom paths:
 ```sh
 cx-setup --homes work=~/.codex-work,school=~/.codex-school --migrate
 ```
+
+Account names and account home paths must be unique. An account home must not be the same directory as the shared home.
 
 ## Shared Workspace Setup
 
@@ -191,6 +199,8 @@ CX_AUTO_MAX_SWITCHES=5
 
 `CX_ACCOUNT` behaves like `--account`: it disables probing, sorting, and auto-switching and uses only the selected account.
 
+`CX_ACCOUNT_COUNT`, `CX_LIMIT_TIMEOUT_MS`, and `CX_AUTO_MAX_SWITCHES` must be positive integers.
+
 By default, `cx` adds `--dangerously-bypass-approvals-and-sandbox` unless a sandbox or approval option is already present. Use `--no-bypass` or `CX_NO_BYPASS=1` to disable that default.
 
 ## Troubleshooting
@@ -202,6 +212,8 @@ By default, `cx` adds `--dangerously-bypass-approvals-and-sandbox` unless a sand
 - Auto-switch resumes the wrong conversation: run `cx-setup --migrate` or `cx-setup --full --migrate` so all account homes share `sessions`.
 - Existing files block setup: rerun with `--migrate` to copy and back up, or `--force` to back up without copying.
 - Setup refuses active homes: exit running Codex sessions, then rerun `cx-setup`.
+- Setup reports duplicate account names/homes: fix `--homes` or `CX_ACCOUNT_HOMES` so every account has a unique name and unique `CODEX_HOME`.
+- Setup reports `Account home must not be the shared home`: use separate directories, for example `~/.codex` for shared state and `~/.codex-account1` for the first account.
 
 ## License
 

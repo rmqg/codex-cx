@@ -249,6 +249,35 @@ function accountHomes(options) {
   }));
 }
 
+function validateAccounts(accounts, sharedHome) {
+  const names = new Map();
+  const homes = new Map();
+  const normalizedSharedHome = path.resolve(sharedHome);
+
+  return accounts.map((account) => {
+    const name = String(account.name || "").trim();
+    if (!name) {
+      throw new Error("Account homes include an account without a name");
+    }
+
+    const normalizedName = name.toLowerCase();
+    const normalizedHome = path.resolve(account.home);
+    if (names.has(normalizedName)) {
+      throw new Error(`Account homes include duplicate account name: ${name}`);
+    }
+    if (homes.has(normalizedHome)) {
+      throw new Error(`Account homes include duplicate account home: ${normalizedHome}`);
+    }
+    if (normalizedHome === normalizedSharedHome) {
+      throw new Error(`Account home must not be the shared home: ${normalizedHome}`);
+    }
+
+    names.set(normalizedName, account);
+    homes.set(normalizedHome, account);
+    return { ...account, name, home: normalizedHome };
+  });
+}
+
 function activeCodexHomes() {
   const active = new Set();
   let pids;
@@ -384,7 +413,8 @@ function linkItem(accountHome, sharedHome, item, options) {
 
 function setup(options) {
   const items = options.full ? fullSharedItems : defaultSharedItems;
-  const homes = accountHomes(options).map((account) => ({ ...account, home: path.resolve(account.home) }));
+  const sharedHome = path.resolve(options.sharedHome);
+  const homes = validateAccounts(accountHomes(options), sharedHome);
   if (homes.length < 1) {
     throw new Error("No account homes selected. Use --accounts <N> on a new machine, or --homes name=/path,...");
   }
@@ -398,12 +428,12 @@ function setup(options) {
     );
   }
 
-  ensureDir(options.sharedHome, options);
+  ensureDir(sharedHome, options);
 
   for (const { home: accountHome } of homes) {
     ensureDir(accountHome, options);
     for (const item of items) {
-      linkItem(accountHome, options.sharedHome, item, options);
+      linkItem(accountHome, sharedHome, item, options);
     }
     console.log(`configured ${accountHome}`);
   }
@@ -431,4 +461,5 @@ module.exports = {
   parseArgs,
   parseHomes,
   setup,
+  validateAccounts,
 };

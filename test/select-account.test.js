@@ -30,6 +30,8 @@ function cleanEnv(extra = {}) {
   delete env.CX_ACCOUNT;
   delete env.CX_ACCOUNT_COUNT;
   delete env.CX_ACCOUNT_HOMES;
+  delete env.CX_AUTO_MAX_SWITCHES;
+  delete env.CX_LIMIT_TIMEOUT_MS;
   return { ...env, ...extra };
 }
 
@@ -195,6 +197,54 @@ function taskComplete() {
 
 {
   const cx = path.resolve(__dirname, "../bin/cx");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-help-home-"));
+  fs.mkdirSync(path.join(tempHome, ".codex-account1"));
+  const result = spawnSync(process.execPath, [cx, "--account", "1", "--dry-run", "exec", "--help"], {
+    env: cleanEnv({ HOME: tempHome }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /codex .*exec --help/);
+  assert.doesNotMatch(result.stdout, /Usage:\n  cx /);
+  fs.rmSync(tempHome, { recursive: true, force: true });
+}
+
+{
+  const cx = path.resolve(__dirname, "../bin/cx");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-delimiter-home-"));
+  fs.mkdirSync(path.join(tempHome, ".codex-account1"));
+  const result = spawnSync(process.execPath, [cx, "--account", "1", "--dry-run", "--", "--dry-run", "exec", "hello"], {
+    env: cleanEnv({ HOME: tempHome }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /codex .*--dry-run exec hello/);
+  fs.rmSync(tempHome, { recursive: true, force: true });
+}
+
+{
+  const cx = path.resolve(__dirname, "../bin/cx");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-approval-home-"));
+  fs.mkdirSync(path.join(tempHome, ".codex-account1"));
+  const result = spawnSync(
+    process.execPath,
+    [cx, "--account", "1", "--dry-run", "--ask-for-approval", "never", "exec", "hello"],
+    {
+      env: cleanEnv({ HOME: tempHome }),
+      encoding: "utf8",
+    },
+  );
+
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /codex --ask-for-approval never exec hello/);
+  assert.doesNotMatch(result.stderr, /dangerously-bypass/);
+  fs.rmSync(tempHome, { recursive: true, force: true });
+}
+
+{
+  const cx = path.resolve(__dirname, "../bin/cx");
   const result = spawnSync(process.execPath, [cx, "--dry-run"], {
     env: cleanEnv({ CX_ACCOUNT_HOMES: "work=" }),
     encoding: "utf8",
@@ -202,6 +252,69 @@ function taskComplete() {
 
   assert.equal(result.status, 2);
   assert.match(result.stderr, /CX_ACCOUNT_HOMES entries must include a path/);
+}
+
+{
+  const cx = path.resolve(__dirname, "../bin/cx");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-duplicate-name-"));
+  const result = spawnSync(process.execPath, [cx, "status"], {
+    env: cleanEnv({ CX_ACCOUNT_HOMES: `work=${tempHome}/a,WORK=${tempHome}/b` }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /duplicate account name: WORK/);
+  fs.rmSync(tempHome, { recursive: true, force: true });
+}
+
+{
+  const cx = path.resolve(__dirname, "../bin/cx");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-duplicate-home-"));
+  const result = spawnSync(process.execPath, [cx, "status"], {
+    env: cleanEnv({ CX_ACCOUNT_HOMES: `work=${tempHome},backup=${tempHome}` }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /duplicate account home/);
+  fs.rmSync(tempHome, { recursive: true, force: true });
+}
+
+{
+  const cx = path.resolve(__dirname, "../bin/cx");
+  const result = spawnSync(process.execPath, [cx, "status"], {
+    env: cleanEnv({ CX_LIMIT_TIMEOUT_MS: "abc" }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /CX_LIMIT_TIMEOUT_MS must be a positive integer/);
+}
+
+{
+  const cx = path.resolve(__dirname, "../bin/cx");
+  const result = spawnSync(process.execPath, [cx, "status"], {
+    env: cleanEnv({ CX_AUTO_MAX_SWITCHES: "0" }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /CX_AUTO_MAX_SWITCHES must be a positive integer/);
+}
+
+{
+  const result = spawnSync(
+    process.execPath,
+    ["-e", "process.env.CX_ACCOUNT_HOMES='broken='; require('./bin/cx'); console.log('ok')"],
+    {
+      cwd: path.resolve(__dirname, ".."),
+      env: cleanEnv(),
+      encoding: "utf8",
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "ok");
 }
 
 {

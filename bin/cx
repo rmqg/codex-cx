@@ -9,12 +9,9 @@ const path = require("path");
 const home = os.homedir();
 const packageVersion = readPackageVersion();
 
-const timeoutMs = Number(process.env.CX_LIMIT_TIMEOUT_MS || 15000);
-const autoMaxSwitches = Number(process.env.CX_AUTO_MAX_SWITCHES || 5);
 const weeklySimilarDelta = 5;
 const primarySimilarDelta = 20;
 const rateLimitPattern = /Turn error:.*(?:usage limit|rate limit|limit reached|429)|You've hit your usage limit/i;
-const defaultAccounts = initializeDefaultAccounts();
 const continuationPrompt =
   "Continue the interrupted task from the last user instruction in this session. " +
   "The previous account hit a usage limit before completing the turn; do not ask the user to repeat it.";
@@ -110,13 +107,15 @@ const execResumeSupportedOptions = new Set([
 ]);
 
 let activeChild = null;
+let defaultAccountsCache = null;
+let runtimeConfigCache = null;
 let terminating = false;
 
 function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.0";
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.1";
   } catch {
-    return "0.5.0";
+    return "0.5.1";
   }
 }
 
@@ -153,7 +152,11 @@ function parseArgs(argv) {
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "-h" || arg === "--help") {
+    if (arg === "--") {
+      codexArgs.push(...argv.slice(i + 1));
+      break;
+    }
+    if ((arg === "-h" || arg === "--help") && codexArgs.length === 0) {
       usage();
       process.exit(0);
     }
@@ -175,7 +178,7 @@ function parseArgs(argv) {
     }
     if (arg === "--account") {
       if (!argv[i + 1] || argv[i + 1].startsWith("-")) {
-        const error = new Error(`--account requires one of: ${accountSelectorHint()}`);
+        const error = new Error("--account requires a selector");
         error.exitCode = 2;
         throw error;
       }
@@ -202,9 +205,21 @@ function parsePositiveInteger(value, fallback, label) {
 
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new Error(`${label} must be a positive integer`);
+    const error = new Error(`${label} must be a positive integer`);
+    error.exitCode = 2;
+    throw error;
   }
   return parsed;
+}
+
+function getRuntimeConfig() {
+  if (!runtimeConfigCache) {
+    runtimeConfigCache = {
+      timeoutMs: parsePositiveInteger(process.env.CX_LIMIT_TIMEOUT_MS, 15000, "CX_LIMIT_TIMEOUT_MS"),
+      autoMaxSwitches: parsePositiveInteger(process.env.CX_AUTO_MAX_SWITCHES, 5, "CX_AUTO_MAX_SWITCHES"),
+    };
+  }
+  return runtimeConfigCache;
 }
 
 function naturalAccountSort(a, b) {
@@ -293,47 +308,71 @@ function buildDefaultAccounts() {
     if (accounts.length < 1) {
       throw new Error("CX_ACCOUNT_HOMES requires at least one account home");
     }
-    return accounts;
+    return validateAccounts(accounts, "CX_ACCOUNT_HOMES");
   }
 
   if (process.env.CX_ACCOUNT_COUNT) {
     const count = parsePositiveInteger(process.env.CX_ACCOUNT_COUNT, null, "CX_ACCOUNT_COUNT");
-    return Array.from({ length: count }, (_, index) => {
+    return validateAccounts(Array.from({ length: count }, (_, index) => {
       const number = index + 1;
       return { name: `account${number}`, home: path.join(home, `.codex-account${number}`) };
-    });
+    }), "CX_ACCOUNT_COUNT");
   }
 
-  return discoverAccountHomes();
+  return validateAccounts(discoverAccountHomes(), "discovered accounts");
 }
 
-function initializeDefaultAccounts() {
-  try {
-    return buildDefaultAccounts();
-  } catch (error) {
-    if (require.main === module) {
-      console.error(`[cx] ${error.message}`);
-      process.exit(2);
+function validateAccounts(accounts, label) {
+  const names = new Map();
+  const homes = new Map();
+
+  for (const account of accounts) {
+    const normalizedName = account.name.toLowerCase();
+    const normalizedHome = path.resolve(account.home);
+    if (names.has(normalizedName)) {
+      throw new Error(`${label} has duplicate account name: ${account.name}`);
     }
-    throw error;
+    if (homes.has(normalizedHome)) {
+      throw new Error(`${label} has duplicate account home: ${normalizedHome}`);
+    }
+    names.set(normalizedName, account);
+    homes.set(normalizedHome, account);
   }
+
+  return accounts.map((account) => ({ ...account, home: path.resolve(account.home) }));
 }
 
-function accountSelectorHint() {
-  if (defaultAccounts.length < 1) {
+function safeAccountName(name) {
+  return name.replace(/[^A-Za-z0-9_.-]/g, "_") || "account";
+}
+
+function getDefaultAccounts() {
+  if (!defaultAccountsCache) {
+    try {
+      defaultAccountsCache = buildDefaultAccounts();
+    } catch (error) {
+      error.exitCode = error.exitCode || 2;
+      throw error;
+    }
+  }
+  return defaultAccountsCache;
+}
+
+function accountSelectorHint(accounts = getDefaultAccounts()) {
+  if (accounts.length < 1) {
     return "no accounts configured; run cx-setup --accounts <N> --migrate or set CX_ACCOUNT_HOMES";
   }
-  const numeric = defaultAccounts.map((_, index) => String(index + 1)).join("|");
-  const names = defaultAccounts.map((account) => account.name).join("|");
+  const numeric = accounts.map((_, index) => String(index + 1)).join("|");
+  const names = accounts.map((account) => account.name).join("|");
   return `${numeric}|${names}`;
 }
 
-function accountMatches(account, selector) {
+function accountMatches(account, selector, accounts = getDefaultAccounts()) {
   if (!selector) {
     return false;
   }
   const normalized = String(selector).trim().toLowerCase();
-  const index = defaultAccounts.indexOf(account);
+  const index = accounts.indexOf(account);
   return (
     (index >= 0 && normalized === String(index + 1)) ||
     normalized === account.name.toLowerCase() ||
@@ -361,6 +400,7 @@ function readRateLimits(account) {
     let buffer = "";
     let stderr = "";
     let settled = false;
+    const { timeoutMs } = getRuntimeConfig();
 
     const timer = setTimeout(() => {
       finish({ account, ok: false, error: `timeout after ${timeoutMs}ms` });
@@ -506,6 +546,7 @@ function isUsable(result) {
 
 function getProcessActiveAccountNames() {
   const names = new Set();
+  const accounts = getDefaultAccounts();
   let pids;
   try {
     pids = fs.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry));
@@ -527,7 +568,7 @@ function getProcessActiveAccountNames() {
       if (!codexHome) {
         continue;
       }
-      const account = defaultAccounts.find((candidate) => candidate.home === codexHome);
+      const account = accounts.find((candidate) => path.resolve(candidate.home) === path.resolve(codexHome));
       if (account) {
         names.add(account.name);
       }
@@ -614,6 +655,8 @@ function hasSafetyOverride(args) {
     arg.startsWith("--sandbox=") ||
     arg === "--approval-policy" ||
     arg.startsWith("--approval-policy=") ||
+    arg === "--ask-for-approval" ||
+    arg.startsWith("--ask-for-approval=") ||
     arg === "-s" ||
     arg === "-a"
   );
@@ -864,7 +907,7 @@ function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
 
 async function probeAccounts(excludedNames = new Set(), options = {}) {
   const activeNames = options.activeNames || getActiveAccountNames();
-  const accounts = defaultAccounts.filter((account) => !excludedNames.has(account.name));
+  const accounts = getDefaultAccounts().filter((account) => !excludedNames.has(account.name));
   const results = await Promise.all(accounts.map(readRateLimits));
   for (const result of results) {
     result.active = activeNames.has(result.account.name);
@@ -995,11 +1038,13 @@ async function runForced(options, codexArgs, account) {
 }
 
 async function runAuto(options, initialArgs) {
+  const accounts = getDefaultAccounts();
+  const { autoMaxSwitches } = getRuntimeConfig();
   const exhausted = new Set();
   let codexArgs = [...initialArgs];
   let switches = 0;
 
-  if (defaultAccounts.length < 1) {
+  if (accounts.length < 1) {
     printNoAccountsConfigured();
     return 1;
   }
@@ -1020,7 +1065,7 @@ async function runAuto(options, initialArgs) {
       return 1;
     }
 
-    const logDir = fs.mkdtempSync(path.join(os.tmpdir(), `cx-auto-${selected.account.name}-`));
+    const logDir = fs.mkdtempSync(path.join(os.tmpdir(), `cx-auto-${safeAccountName(selected.account.name)}-`));
     fs.chmodSync(logDir, 0o700);
     const logConfigArg = `log_dir=${JSON.stringify(logDir)}`;
     const commandArgs = [...baseGlobalArgs(options, codexArgs, ["-c", logConfigArg]), ...codexArgs];
@@ -1059,16 +1104,17 @@ async function main() {
   installSignalForwarding();
 
   const { options, codexArgs } = parseArgs(process.argv.slice(2));
+  const accounts = getDefaultAccounts();
   const forced = options.account
-    ? defaultAccounts.find((account) => accountMatches(account, options.account))
+    ? accounts.find((account) => accountMatches(account, options.account, accounts))
     : null;
 
   if (options.accountExplicit && !forced) {
-    if (defaultAccounts.length < 1) {
+    if (accounts.length < 1) {
       printNoAccountsConfigured();
     } else {
       console.error(`[cx] Unknown account: ${options.account}`);
-      console.error(`[cx] Available selectors: ${accountSelectorHint()}`);
+      console.error(`[cx] Available selectors: ${accountSelectorHint(accounts)}`);
     }
     process.exit(2);
   }

@@ -69,6 +69,12 @@ cx resume --last "$@"
 
 `cx --account work ...` 是显式指定账号路径：只使用这个账号，不探测额度、不排序、不自动切号。不显式指定账号时，`cx` 走和 `cxa` 相同的自动切号路径。
 
+如果某个参数必须原样传给 Codex，但它看起来像 `cx` 包装器参数，可以用 `--` 分隔：
+
+```sh
+cx --account work -- --dry-run exec "hello"
+```
+
 ## 多账号
 
 如果没有设置环境变量，`cx` 会自动发现已有的账号目录：
@@ -101,6 +107,8 @@ CX_ACCOUNT_HOMES=work=~/.codex-work,school=~/.codex-school cx --account work
 ```sh
 cx-setup --homes work=~/.codex-work,school=~/.codex-school --migrate
 ```
+
+账号名和账号 home 路径都必须唯一。账号 home 不能和 shared home 指向同一个目录。
 
 ## 共享工作空间
 
@@ -191,6 +199,8 @@ CX_AUTO_MAX_SWITCHES=5
 
 `CX_ACCOUNT` 等价于 `--account`：它会禁用探测、排序和自动切号，只使用指定账号。
 
+`CX_ACCOUNT_COUNT`、`CX_LIMIT_TIMEOUT_MS`、`CX_AUTO_MAX_SWITCHES` 必须是正整数。
+
 默认情况下，`cx` 会在没有显式 sandbox 或 approval 参数时添加 `--dangerously-bypass-approvals-and-sandbox`。可以用 `--no-bypass` 或 `CX_NO_BYPASS=1` 关闭这个默认行为。
 
 ## 故障排查
@@ -202,6 +212,8 @@ CX_AUTO_MAX_SWITCHES=5
 - 自动切号后 resume 到错误会话：运行 `cx-setup --migrate` 或 `cx-setup --full --migrate`，确保所有账号共享 `sessions`。
 - setup 被已有文件拦住：用 `--migrate` 复制并备份，或用 `--force` 只备份不复制。
 - setup 拒绝 active 目录：先退出正在运行的 Codex 会话，再重新运行 `cx-setup`。
+- setup 报重复账号名或重复 home：检查 `--homes` 或 `CX_ACCOUNT_HOMES`，确保每个账号名和每个 `CODEX_HOME` 都唯一。
+- setup 报 `Account home must not be the shared home`：账号目录和共享目录要分开，例如 `~/.codex` 做共享状态，`~/.codex-account1` 做第一个账号。
 
 ## 许可证
 
