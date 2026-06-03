@@ -1,6 +1,6 @@
 {
   "name": "codex-cx",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Small account-switching wrappers for the OpenAI Codex CLI.",
   "license": "MIT",
   "author": "rmqg",
@@ -22,7 +22,7 @@
     "bin"
   ],
   "scripts": {
-    "test": "node --check bin/cx && sh -n bin/cxa && sh -n bin/cxr"
+    "test": "node --check bin/cx && sh -n bin/cxa && sh -n bin/cxr && node test/select-account.test.js"
   },
   "engines": {
     "node": ">=18"

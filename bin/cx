@@ -14,7 +14,6 @@ const defaultAccounts = [
 ];
 
 const timeoutMs = Number(process.env.CX_LIMIT_TIMEOUT_MS || 15000);
-const primarySimilarDelta = Number(process.env.CX_PRIMARY_SIMILAR_DELTA || 20);
 const autoMaxSwitches = Number(process.env.CX_AUTO_MAX_SWITCHES || 5);
 const rateLimitPattern = /Turn error:.*(?:usage limit|rate limit|limit reached|429)|You've hit your usage limit/i;
 const lockDir = path.join(os.tmpdir(), "cx-codex-account-locks");
@@ -24,21 +23,20 @@ let terminating = false;
 
 function usage() {
   console.log(`Usage:
-  cx [codex args...]
-  cx exec "prompt"
+  cx [codex args...]                         Auto-select account and auto-switch on limits.
+  cx exec "prompt"                           Auto-select account and auto-switch on limits.
+  cx auto [codex args...]                    Same as cx without --account.
+  cx --account 2 [codex args...]             Run only with account2.
   cx status
-  cx auto [codex args...]
-  cx --account 2 [codex args...]
   cx --dry-run [codex args...]
   cx --no-bypass [codex args...]
 
 Environment:
-  CX_ACCOUNT=1|2|3|account1|account2|account3   Force first account.
+  CX_ACCOUNT=1|2|3|account1|account2|account3   Same as --account.
   CX_NO_BYPASS=1                                Do not add the bypass flag.
   CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
-  CX_PRIMARY_SIMILAR_DELTA=20                   If 5h usage differs by <= this, compare weekly usage.
   CX_AUTO_MAX_SWITCHES=5                        Max automatic account switches per run.
-  CX_ALLOW_ACTIVE_ACCOUNT=1                     Allow selecting an account already running Codex.`);
+`);
 }
 
 function parseArgs(argv) {
@@ -49,6 +47,7 @@ function parseArgs(argv) {
     dryRun: false,
     noBypass: process.env.CX_NO_BYPASS === "1",
     account: process.env.CX_ACCOUNT || null,
+    accountExplicit: Boolean(process.env.CX_ACCOUNT),
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -75,11 +74,13 @@ function parseArgs(argv) {
     }
     if (arg === "--account") {
       options.account = argv[i + 1];
+      options.accountExplicit = true;
       i += 1;
       continue;
     }
     if (arg.startsWith("--account=")) {
       options.account = arg.slice("--account=".length);
+      options.accountExplicit = true;
       continue;
     }
     codexArgs.push(arg);
@@ -316,22 +317,11 @@ function createAccountLock(account) {
   };
 }
 
-function compareResults(a, b) {
+function compareAccountResults(a, b) {
   const aUsable = isUsable(a);
   const bUsable = isUsable(b);
   if (aUsable !== bUsable) {
     return aUsable ? -1 : 1;
-  }
-
-  if (a.active !== b.active) {
-    return a.active ? 1 : -1;
-  }
-
-  const aPrimary = usedPercent(a.limits, "primary");
-  const bPrimary = usedPercent(b.limits, "primary");
-  const primaryDelta = aPrimary - bPrimary;
-  if (Math.abs(primaryDelta) > primarySimilarDelta) {
-    return primaryDelta;
   }
 
   const aSecondary = usedPercent(a.limits, "secondary");
@@ -341,6 +331,9 @@ function compareResults(a, b) {
     return secondaryDelta;
   }
 
+  const aPrimary = usedPercent(a.limits, "primary");
+  const bPrimary = usedPercent(b.limits, "primary");
+  const primaryDelta = aPrimary - bPrimary;
   if (primaryDelta !== 0) {
     return primaryDelta;
   }
@@ -353,9 +346,9 @@ function formatPercent(value) {
 }
 
 function printStatus(results) {
-  console.error(`Selection rule: compare 5h first; if 5h differs by <= ${primarySimilarDelta}%, compare weekly.`);
+  console.error("Selection rule: compare weekly first; use 5h usage as the tie-breaker; locked accounts remain eligible.");
   console.error("Account   active   5h used   weekly used   reached   home");
-  for (const result of results.slice().sort(compareResults)) {
+  for (const result of results.slice().sort(compareAccountResults)) {
     const limit = result.limits;
     const active = result.active ? "yes" : "-";
     const primary = result.ok ? formatPercent(usedPercent(limit, "primary")) : "ERR";
@@ -387,25 +380,13 @@ function baseGlobalArgs(options, codexArgs, extraGlobalArgs = []) {
   return [...globalArgs, ...extraGlobalArgs];
 }
 
-function selectResult(results, forcedAccount = null) {
-  if (forcedAccount) {
-    const forcedResult = results.find((result) => result.account.name === forcedAccount.name);
-    if (forcedResult && isUsable(forcedResult) && !forcedResult.active) {
-      return forcedResult;
-    }
-  }
-  return results.slice().sort(compareResults)[0] || null;
+function selectResult(results) {
+  return results.slice().sort(compareAccountResults)[0] || null;
 }
 
 async function probeAccounts(excludedNames = new Set(), options = {}) {
   const activeNames = options.activeNames || getActiveAccountNames();
-  let accounts = defaultAccounts.filter((account) => !excludedNames.has(account.name));
-  if (options.avoidActive !== false && process.env.CX_ALLOW_ACTIVE_ACCOUNT !== "1") {
-    const inactiveAccounts = accounts.filter((account) => !activeNames.has(account.name));
-    if (inactiveAccounts.length > 0) {
-      accounts = inactiveAccounts;
-    }
-  }
+  const accounts = defaultAccounts.filter((account) => !excludedNames.has(account.name));
   const results = await Promise.all(accounts.map(readRateLimits));
   for (const result of results) {
     result.active = activeNames.has(result.account.name);
@@ -413,7 +394,7 @@ async function probeAccounts(excludedNames = new Set(), options = {}) {
   return results;
 }
 
-function describeSelection(result, prefix = "cx") {
+function describeSelection(result, prefix = "cx-auto") {
   const limit = result.limits;
   console.error(
     `[${prefix}] selected ${result.account.name}: 5h used ${formatPercent(usedPercent(limit, "primary"))}, ` +
@@ -525,46 +506,34 @@ function runCodexMonitored(account, commandArgs, logDir) {
   });
 }
 
-async function runSingle(options, codexArgs, forced) {
-  const results = await probeAccounts(new Set(), { avoidActive: options.status ? false : true });
-
-  if (options.status) {
-    printStatus(results);
-    return 0;
-  }
-
-  const selected = selectResult(results, forced);
-  if (!selected || !isUsable(selected)) {
-    printStatus(results);
-    console.error("[cx] No usable Codex account found.");
-    return 1;
-  }
-
-  describeSelection(selected);
-
+async function runForced(options, codexArgs, account) {
   const commandArgs = [...baseGlobalArgs(options, codexArgs), ...codexArgs];
   if (options.dryRun) {
-    console.error(`CODEX_HOME=${selected.account.home} codex ${commandArgs.map(shellQuote).join(" ")}`);
+    console.error(`CODEX_HOME=${account.home} codex ${commandArgs.map(shellQuote).join(" ")}`);
     return 0;
   }
 
-  const result = await runCodex(selected.account, commandArgs);
+  const result = await runCodex(account, commandArgs);
   if (result.signal && terminating) {
     return 130;
   }
   return result.code ?? 1;
 }
 
-async function runAuto(options, initialArgs, forced) {
+async function runAuto(options, initialArgs) {
   const exhausted = new Set();
   let codexArgs = [...initialArgs];
-  let firstRun = true;
   let switches = 0;
+
+  if (options.status) {
+    const results = await probeAccounts(exhausted);
+    printStatus(results);
+    return 0;
+  }
 
   for (;;) {
     const results = await probeAccounts(exhausted);
-    const selected = selectResult(results, firstRun ? forced : null);
-    firstRun = false;
+    const selected = selectResult(results);
 
     if (!selected || !isUsable(selected)) {
       printStatus(results);
@@ -577,7 +546,7 @@ async function runAuto(options, initialArgs, forced) {
     const logConfigArg = `log_dir=${JSON.stringify(logDir)}`;
     const commandArgs = [...baseGlobalArgs(options, codexArgs, ["-c", logConfigArg]), ...codexArgs];
 
-    describeSelection(selected, "cx-auto");
+    describeSelection(selected);
 
     if (options.dryRun) {
       console.error(`CODEX_HOME=${selected.account.home} codex ${commandArgs.map(shellQuote).join(" ")}`);
@@ -614,18 +583,27 @@ async function main() {
     ? defaultAccounts.find((account) => accountMatches(account, options.account))
     : null;
 
-  if (options.account && !forced) {
+  if (options.accountExplicit && !forced) {
     console.error(`[cx] Unknown account: ${options.account}`);
     process.exit(2);
   }
 
-  const code = options.auto
-    ? await runAuto(options, codexArgs, forced)
-    : await runSingle(options, codexArgs, forced);
+  const code = options.accountExplicit ? await runForced(options, codexArgs, forced) : await runAuto(options, codexArgs);
   process.exit(code);
 }
 
-main().catch((error) => {
-  console.error(`[cx] ${error.stack || error.message}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`[cx] ${error.stack || error.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  accountMatches,
+  compareAccountResults,
+  isUsable,
+  reached,
+  selectResult,
+  usedPercent,
+};

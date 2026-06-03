@@ -2,16 +2,16 @@
 
 Small account-switching wrappers for the OpenAI Codex CLI.
 
-`cx` probes several local Codex account homes, chooses a usable account with the lowest current usage, and forwards the rest of the command to `codex`. `cxa` and `cxr` are convenience wrappers for common flows.
+`cx` probes several local Codex account homes, chooses the usable account with the lowest weekly usage, and forwards the rest of the command to `codex`. `cxa` and `cxr` are convenience wrappers for common flows.
 
 ## Commands
 
 ```sh
 cx [codex args...]
 cx exec "prompt"
-cx status
 cx auto [codex args...]
 cx --account 2 [codex args...]
+cx status
 cx --dry-run [codex args...]
 
 cxa [codex args...]
@@ -29,6 +29,8 @@ cx auto "$@"
 ```sh
 cx resume --last "$@"
 ```
+
+`cx --account 2 ...` is the escape hatch: it uses only that account and does not probe usage, sort accounts, or auto-switch. Without an explicit account, `cx` uses the same auto-switching path as `cxa`.
 
 ## Install
 
@@ -67,9 +69,10 @@ CODEX_HOME=~/.codex-account3 codex login
 ## Behavior
 
 - `cx status` prints the detected accounts, active state, recent usage, weekly usage, and account home.
-- `cx` avoids accounts that already have an active Codex process when another inactive account is available.
+- Account selection is weekly-first, then 5h usage, then account name.
+- Locked or already-running accounts stay eligible. This means `cxa` can still launch when all accounts are locked, and it can fall back to a locked usable account when unlocked accounts are exhausted.
 - `cx auto` monitors the Codex TUI log for rate-limit errors. If a limit is detected, it terminates the current run, switches accounts, and resumes with `codex resume --last`.
-- `--account 1`, `--account 2`, or `--account 3` forces the first account choice.
+- `--account 1`, `--account 2`, or `--account 3` runs only that account and disables probing, sorting, and auto-switching.
 - `--dry-run` prints the `CODEX_HOME=... codex ...` command without launching Codex.
 
 By default, `cx` adds `--dangerously-bypass-approvals-and-sandbox` unless a sandbox or approval option is already present. Use `--no-bypass` or `CX_NO_BYPASS=1` to disable that default.
@@ -80,9 +83,7 @@ By default, `cx` adds `--dangerously-bypass-approvals-and-sandbox` unless a sand
 CX_ACCOUNT=1|2|3|account1|account2|account3
 CX_NO_BYPASS=1
 CX_LIMIT_TIMEOUT_MS=15000
-CX_PRIMARY_SIMILAR_DELTA=20
 CX_AUTO_MAX_SWITCHES=5
-CX_ALLOW_ACTIVE_ACCOUNT=1
 ```
 
 ## Requirements
