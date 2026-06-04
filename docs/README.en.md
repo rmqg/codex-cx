@@ -55,6 +55,7 @@ cx --account work [codex args...]
 cx status
 cx --dry-run [codex args...]
 cx --no-bypass [codex args...]
+cx --no-trust [codex args...]
 
 cxa [codex args...]
 cxr [extra resume args...]
@@ -80,6 +81,8 @@ Use `--` when an argument must be passed to Codex even though it looks like a `c
 ```sh
 cx --account work -- --dry-run exec "hello"
 ```
+
+By default, `cx` injects a temporary Codex config override for the current work root: `projects."<cwd>".trust_level="trusted"`. This prevents a newly selected account from stopping at the “Do you trust the contents of this directory?” prompt during automatic switching. The override applies only to that launch and does not write to the account's `config.toml`; use `--no-trust` or `CX_NO_TRUST=1` to keep Codex's normal directory trust prompt.
 
 ## Multiple Accounts
 
@@ -183,7 +186,7 @@ codex resume --last
 codex exec resume --last "Continue the interrupted task ..."
 ```
 
-If the last turn in the current session completed, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, `cx` resumes it through `codex exec resume --last "Continue ..."` so the next account continues that pending instruction. This deliberately avoids passing a prompt to interactive `codex resume --last`, because current Codex CLI versions treat that extra positional argument as a session ID. After the resumed exec turn finishes, Codex exits; start `cxr` again if you want to keep chatting in the TUI.
+If the last turn in the current session completed normally and produced assistant output, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, or Codex wrote `task_complete` for an out-of-credits turn with an empty `last_agent_message`, `cx` resumes it through `codex exec resume --last "Continue ..."` so the next account continues that pending instruction. This deliberately avoids passing a prompt to interactive `codex resume --last`, because current Codex CLI versions treat that extra positional argument as a session ID. After the resumed exec turn finishes, Codex exits; start `cxr` again if you want to keep chatting in the TUI.
 
 For `cx exec ...`, retries use `codex exec resume --last "Continue ..."` so non-interactive sessions keep their mode and can explicitly continue the pending instruction. If the original command was `cx exec resume <session-id>`, the retry keeps that explicit session id instead of switching to `--last`.
 
@@ -204,6 +207,7 @@ CX_ACCOUNT=1|account1|work
 CX_ACCOUNT_COUNT=N
 CX_ACCOUNT_HOMES=name=/path,name2=/path2
 CX_NO_BYPASS=1
+CX_NO_TRUST=1
 CX_AUTO_RESUME_GOAL=0
 CX_LIMIT_TIMEOUT_MS=15000
 CX_AUTO_MAX_SWITCHES=5
@@ -216,6 +220,8 @@ CX_INTERACTIVE_AUTO_EXEC=0
 
 By default, `cx` adds `--dangerously-bypass-approvals-and-sandbox` unless a sandbox or approval option is already present. Use `--no-bypass` or `CX_NO_BYPASS=1` to disable that default.
 
+By default, `cx` trusts the work root used for the launch so account switches are not interrupted by the directory trust prompt. Use `--no-trust` or `CX_NO_TRUST=1` to disable that default.
+
 By default, resume commands automatically reactivate paused, usage-limited, or blocked goals. Set `CX_AUTO_RESUME_GOAL=0` to disable this preflight.
 
 By default, interrupted interactive turns continue through `codex exec resume ...` after an automatic account switch. Set `CX_INTERACTIVE_AUTO_EXEC=0` to keep the older conservative behavior, which only reopens the TUI with `codex resume --last`.
@@ -226,6 +232,7 @@ By default, interrupted interactive turns continue through `codex exec resume ..
 - `missing ~/.codex-accountN/auth.json`: run `CODEX_HOME=~/.codex-accountN codex login`.
 - `All candidate accounts are exhausted or unavailable`: all probed accounts failed login/probing or hit a 5h/weekly limit.
 - `cx status` does not show active accounts: active detection reads `/proc`, so it is Linux-focused.
+- Auto-switch stops at the directory trust prompt: confirm the installed `cx` is current. Current versions inject trust for the work root by default; if `CX_NO_TRUST=1` or `--no-trust` is set, unset it or trust the directory manually.
 - Auto-switch resumes the wrong conversation: run `cx-setup --migrate` or `cx-setup --full --migrate` so all account homes share `sessions`.
 - Existing files block setup: rerun with `--migrate` to copy and back up, or `--force` to back up without copying.
 - Setup refuses active homes: exit running Codex sessions, then rerun `cx-setup`.

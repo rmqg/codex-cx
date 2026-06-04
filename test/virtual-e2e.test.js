@@ -26,8 +26,14 @@ function send(data) { process.stdout.write(JSON.stringify(data) + '\\n'); }
 function limits() { return JSON.parse(process.env.FAKE_LIMITS || '{}')[account] || { p: 99, s: 99, r: '' }; }
 function goals() { return JSON.parse(process.env.FAKE_GOALS || '{}')[account] || {}; }
 function logDir() {
-  const index = args.findIndex((arg) => arg === '-c');
-  const value = index >= 0 ? args[index + 1] : args.find((arg) => arg.startsWith('log_dir='));
+  let value = args.find((arg) => arg.startsWith('log_dir='));
+  for (let index = 0; !value && index < args.length; index += 1) {
+    if (args[index] === '-c' || args[index] === '--config') {
+      const candidate = args[index + 1];
+      if (candidate && candidate.startsWith('log_dir=')) value = candidate;
+      index += 1;
+    }
+  }
   if (!value || !value.startsWith('log_dir=')) return null;
   const encoded = value.slice('log_dir='.length);
   try { return JSON.parse(encoded); } catch { return encoded; }
@@ -38,6 +44,16 @@ function writeIncompleteSession() {
   fs.writeFileSync(path.join(dir, 'rollout-e2e.jsonl'), [
     JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-e2e' } }),
     JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'implement feature' }] } })
+  ].join('\\n') + '\\n');
+}
+function writeUsageLimitedCompleteSession() {
+  const dir = path.join(home, 'sessions', '2026', '06', '04');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'rollout-e2e.jsonl'), [
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-e2e' } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'new request' }] } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'token_count', rate_limits: { credits: { has_credits: false }, rate_limit_reached_type: null } } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-e2e', last_agent_message: null } })
   ].join('\\n') + '\\n');
 }
 function writeLog(line) {
@@ -111,7 +127,11 @@ if (args[0] === 'app-server') {
     process.exit(7);
   }
   if (account === process.env.FAKE_LIMIT_ACCOUNT) {
-    writeIncompleteSession();
+    if (process.env.FAKE_LIMIT_SESSION === 'usage-complete') {
+      writeUsageLimitedCompleteSession();
+    } else {
+      writeIncompleteSession();
+    }
     if (process.env.FAKE_LIMIT_LOG === 'out-of-credits') {
       writeLog('2026-06-04T03:28:15.620801Z  INFO session_loop{thread_id=019e907c}:turn{model=gpt-5.5}: codex_core::session::turn: Turn error: Your workspace is out of credits. Add credits to continue.');
     } else if (process.env.FAKE_LIMIT_LOG === 'goal') {
@@ -144,7 +164,7 @@ const envBase = {
   CX_AUTO_MAX_SWITCHES: "6",
 };
 
-for (const key of ["CX_ACCOUNT", "CX_ACCOUNT_COUNT", "CX_ACCOUNT_HOMES", "CX_AUTO_RESUME_GOAL", "CX_NO_BYPASS"]) {
+for (const key of ["CX_ACCOUNT", "CX_ACCOUNT_COUNT", "CX_ACCOUNT_HOMES", "CX_AUTO_RESUME_GOAL", "CX_NO_BYPASS", "CX_NO_TRUST"]) {
   delete envBase[key];
 }
 delete envBase.CX_INTERACTIVE_AUTO_EXEC;
@@ -246,6 +266,7 @@ function runVirtualE2e() {
   result = ok("cxa", ["--dry-run", "exec", "hello"]);
   assert.match(result.stderr, /selected account1/);
   assert.match(result.stderr, /exec hello/);
+  assert.match(result.stderr, /trust_level="trusted"/);
 
   result = ok("cx", ["--account", "4", "--dry-run", "--no-bypass", "exec", "hello"]);
   assert.match(result.stderr, /\.codex-account4/);
@@ -319,6 +340,19 @@ function runVirtualE2e() {
   ok("cxa", ["exec", "implement feature"], {
     FAKE_LIMIT_ACCOUNT: ".codex-account1",
     FAKE_LIMIT_LOG: "out-of-credits",
+  });
+  runs = readRecords().filter((entry) => entry.type === "run");
+  assert.equal(runs.length, 2, JSON.stringify(runs));
+  assert.equal(path.basename(runs[1].home), ".codex-account3");
+  assert.ok(runs[1].args.includes("exec"));
+  assert.ok(runs[1].args.includes("resume"));
+  assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
+
+  clearRecords();
+  ok("cxa", ["resume", "--last"], {
+    FAKE_LIMIT_ACCOUNT: ".codex-account1",
+    FAKE_LIMIT_LOG: "out-of-credits",
+    FAKE_LIMIT_SESSION: "usage-complete",
   });
   runs = readRecords().filter((entry) => entry.type === "run");
   assert.equal(runs.length, 2, JSON.stringify(runs));

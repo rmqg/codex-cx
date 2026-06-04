@@ -55,6 +55,7 @@ cx --account work [codex args...]
 cx status
 cx --dry-run [codex args...]
 cx --no-bypass [codex args...]
+cx --no-trust [codex args...]
 
 cxa [codex args...]
 cxr [extra resume args...]
@@ -80,6 +81,8 @@ cx resume --last "$@"
 ```sh
 cx --account work -- --dry-run exec "hello"
 ```
+
+默认情况下，`cx` 会给当前工作根注入临时 Codex 配置 `projects."<cwd>".trust_level="trusted"`。这样自动切到新账号时不会停在 “Do you trust the contents of this directory?” 提示上。这个配置只作用于本次启动，不会写入账号的 `config.toml`；如果你需要保留 Codex 的目录确认提示，可以用 `--no-trust` 或 `CX_NO_TRUST=1` 关闭。
 
 ## 多账号
 
@@ -183,7 +186,7 @@ codex resume --last
 codex exec resume --last "Continue the interrupted task ..."
 ```
 
-如果上一轮已经完成，`cx` 只恢复会话。如果交互式 `cx` 或 `cxr` 的新指令已经写入 session，但这一轮还没完成，`cx` 会通过 `codex exec resume --last "Continue ..."` 让下一个账号继续执行这条未完成指令。这样做是为了避开交互式 `codex resume --last` 的参数限制：当前 Codex CLI 会把后面的额外位置参数当成 session ID。恢复出来的 exec turn 完成后 Codex 会退出；如果你想继续在 TUI 里对话，再启动一次 `cxr` 即可。
+如果上一轮已经正常完成并产生了 assistant 输出，`cx` 只恢复会话。如果交互式 `cx` 或 `cxr` 的新指令已经写入 session，但这一轮还没完成，或者 Codex 因额度耗尽写出了 `task_complete` 但 `last_agent_message` 为空，`cx` 会通过 `codex exec resume --last "Continue ..."` 让下一个账号继续执行这条未完成指令。这样做是为了避开交互式 `codex resume --last` 的参数限制：当前 Codex CLI 会把后面的额外位置参数当成 session ID。恢复出来的 exec turn 完成后 Codex 会退出；如果你想继续在 TUI 里对话，再启动一次 `cxr` 即可。
 
 对 `cx exec ...`，重试会走 `codex exec resume --last "Continue ..."`，保持非交互模式，并显式继续未完成的用户指令。如果原始命令是 `cx exec resume <session-id>`，重试会保留这个显式 session id，而不是改成 `--last`。
 
@@ -204,6 +207,7 @@ CX_ACCOUNT=1|account1|work
 CX_ACCOUNT_COUNT=N
 CX_ACCOUNT_HOMES=name=/path,name2=/path2
 CX_NO_BYPASS=1
+CX_NO_TRUST=1
 CX_AUTO_RESUME_GOAL=0
 CX_LIMIT_TIMEOUT_MS=15000
 CX_AUTO_MAX_SWITCHES=5
@@ -216,6 +220,8 @@ CX_INTERACTIVE_AUTO_EXEC=0
 
 默认情况下，`cx` 会在没有显式 sandbox 或 approval 参数时添加 `--dangerously-bypass-approvals-and-sandbox`。可以用 `--no-bypass` 或 `CX_NO_BYPASS=1` 关闭这个默认行为。
 
+默认情况下，`cx` 会信任本次启动使用的工作根，避免多账号自动切换时被目录信任确认打断。可以用 `--no-trust` 或 `CX_NO_TRUST=1` 关闭这个默认行为。
+
 默认情况下，resume 命令会自动恢复 paused、usage-limited 或 blocked goal。设置 `CX_AUTO_RESUME_GOAL=0` 可以关闭这个预处理。
 
 默认情况下，交互式 turn 在自动切号后会通过 `codex exec resume ...` 继续未完成任务。设置 `CX_INTERACTIVE_AUTO_EXEC=0` 可以回到旧的保守行为，只用 `codex resume --last` 重新打开 TUI。
@@ -226,6 +232,7 @@ CX_INTERACTIVE_AUTO_EXEC=0
 - `missing ~/.codex-accountN/auth.json`：运行 `CODEX_HOME=~/.codex-accountN codex login`。
 - `All candidate accounts are exhausted or unavailable`：所有账号都探测失败、未登录或触达了 5h/weekly 限制。
 - `cx status` 不显示 active：active 检测依赖 Linux `/proc`。
+- 自动切号后停在目录信任提示：确认正在使用新版 `cx`；新版默认会注入当前工作根的 trust 配置。如果你设置了 `CX_NO_TRUST=1` 或 `--no-trust`，需要取消它或手动信任目录。
 - 自动切号后 resume 到错误会话：运行 `cx-setup --migrate` 或 `cx-setup --full --migrate`，确保所有账号共享 `sessions`。
 - setup 被已有文件拦住：用 `--migrate` 复制并备份，或用 `--force` 只备份不复制。
 - setup 拒绝 active 目录：先退出正在运行的 Codex 会话，再重新运行 `cx-setup`。

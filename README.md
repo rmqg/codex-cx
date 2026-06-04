@@ -19,6 +19,7 @@ Run the same command again to update an existing global install.
 
 ```sh
 cx [codex args...]
+cx --no-trust [codex args...]
 cxa [codex args...]
 cxr [extra resume args...]
 cx-setup [options]

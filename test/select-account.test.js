@@ -42,6 +42,7 @@ function cleanEnv(extra = {}) {
   delete env.CX_AUTO_MAX_SWITCHES;
   delete env.CX_INTERACTIVE_AUTO_EXEC;
   delete env.CX_LIMIT_TIMEOUT_MS;
+  delete env.CX_NO_TRUST;
   return { ...env, ...extra };
 }
 
@@ -83,8 +84,21 @@ function assistantMessage(text) {
   };
 }
 
-function taskComplete() {
-  return { type: "event_msg", payload: { type: "task_complete", turn_id: "turn-1" } };
+function taskComplete(lastAgentMessage = null) {
+  return { type: "event_msg", payload: { type: "task_complete", turn_id: "turn-1", last_agent_message: lastAgentMessage } };
+}
+
+function tokenCountWithoutCredits() {
+  return {
+    type: "event_msg",
+    payload: {
+      type: "token_count",
+      rate_limits: {
+        credits: { has_credits: false },
+        rate_limit_reached_type: null,
+      },
+    },
+  };
 }
 
 {
@@ -321,9 +335,45 @@ function taskComplete() {
   );
 
   assert.equal(result.status, 0);
-  assert.match(result.stderr, /codex --ask-for-approval never exec hello/);
+  assert.match(result.stderr, /--ask-for-approval never exec hello/);
   assert.doesNotMatch(result.stderr, /dangerously-bypass/);
   fs.rmSync(tempHome, { recursive: true, force: true });
+}
+
+{
+  const cx = path.resolve(__dirname, "../bin/cx");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-trust-home-"));
+  const trustedCwd = fs.mkdtempSync(path.join(os.tmpdir(), "cx-trusted-cwd-"));
+  fs.mkdirSync(path.join(tempHome, ".codex-account1"));
+
+  const trusted = spawnSync(process.execPath, [cx, "--account", "1", "--dry-run", "exec", "hello"], {
+    cwd: trustedCwd,
+    env: cleanEnv({ HOME: tempHome }),
+    encoding: "utf8",
+  });
+  assert.equal(trusted.status, 0);
+  assert.match(trusted.stderr, /-c/);
+  assert.match(trusted.stderr, /trust_level="trusted"/);
+  assert.match(trusted.stderr, /projects\./);
+
+  const disabledByFlag = spawnSync(process.execPath, [cx, "--account", "1", "--dry-run", "--no-trust", "exec", "hello"], {
+    cwd: trustedCwd,
+    env: cleanEnv({ HOME: tempHome }),
+    encoding: "utf8",
+  });
+  assert.equal(disabledByFlag.status, 0);
+  assert.doesNotMatch(disabledByFlag.stderr, /trust_level="trusted"/);
+
+  const disabledByEnv = spawnSync(process.execPath, [cx, "--account", "1", "--dry-run", "exec", "hello"], {
+    cwd: trustedCwd,
+    env: cleanEnv({ HOME: tempHome, CX_NO_TRUST: "1" }),
+    encoding: "utf8",
+  });
+  assert.equal(disabledByEnv.status, 0);
+  assert.doesNotMatch(disabledByEnv.stderr, /trust_level="trusted"/);
+
+  fs.rmSync(tempHome, { recursive: true, force: true });
+  fs.rmSync(trustedCwd, { recursive: true, force: true });
 }
 
 {
@@ -458,6 +508,24 @@ function taskComplete() {
     ["exec", "resume", "--last"],
     "completed exec turns resume the session without replaying the prompt",
   );
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [taskStarted(), userMessage("new request"), tokenCountWithoutCredits(), taskComplete(null)]);
+
+  const retryArgs = retryArgsAfterRateLimit(["resume", "--last"], accountHome, {
+    minMtimeMs: Date.now() - 1000,
+  });
+
+  assert.deepEqual(
+    retryArgs,
+    ["exec", "resume", "--last", retryArgs.at(-1)],
+    "usage-limited turns with task_complete but no assistant output are continued through exec resume",
+  );
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
   fs.rmSync(accountHome, { recursive: true, force: true });
 }

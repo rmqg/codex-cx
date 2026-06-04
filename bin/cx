@@ -122,9 +122,9 @@ let terminating = false;
 
 function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.6";
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.7";
   } catch {
-    return "0.5.6";
+    return "0.5.7";
   }
 }
 
@@ -137,12 +137,14 @@ function usage() {
   cx status
   cx --dry-run [codex args...]
   cx --no-bypass [codex args...]
+  cx --no-trust [codex args...]
 
 Environment:
   CX_ACCOUNT=1|account1|work                    Same as --account.
   CX_ACCOUNT_COUNT=N                            Probe ~/.codex-account1..N.
   CX_ACCOUNT_HOMES=/path/a,/path/b              Explicit comma-separated CODEX_HOME list.
   CX_NO_BYPASS=1                                Do not add the bypass flag.
+  CX_NO_TRUST=1                                 Do not inject project trust for the current workdir.
   CX_AUTO_RESUME_GOAL=0                         Do not reactivate paused/limited goals before resume.
   CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
   CX_AUTO_MAX_SWITCHES=5                        Max automatic account switches per run.
@@ -157,6 +159,7 @@ function parseArgs(argv) {
     status: false,
     dryRun: false,
     noBypass: process.env.CX_NO_BYPASS === "1",
+    noTrust: process.env.CX_NO_TRUST === "1",
     account: process.env.CX_ACCOUNT || null,
     accountExplicit: Boolean(process.env.CX_ACCOUNT),
   };
@@ -185,6 +188,10 @@ function parseArgs(argv) {
     }
     if (arg === "--no-bypass") {
       options.noBypass = true;
+      continue;
+    }
+    if (arg === "--no-trust") {
+      options.noTrust = true;
       continue;
     }
     if (arg === "--account") {
@@ -703,10 +710,55 @@ function hasSafetyOverride(args) {
   );
 }
 
+function cwdFromOptionArgs(optionArgs, fallback = process.cwd()) {
+  let cwd = fallback;
+  for (let index = 0; index < optionArgs.length; index += 1) {
+    const arg = optionArgs[index];
+    if (arg === "-C" || arg === "--cd") {
+      if (optionArgs[index + 1]) {
+        cwd = expandHomePath(optionArgs[index + 1]);
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("--cd=")) {
+      cwd = expandHomePath(arg.slice("--cd=".length));
+    }
+  }
+  return path.resolve(cwd);
+}
+
+function cwdFromCodexArgs(args) {
+  const leading = splitLeadingOptions(args, 0, globalValueOptions);
+  let cwd = cwdFromOptionArgs(leading.options);
+  const command = args[leading.index];
+
+  if (command === "exec" || command === "e") {
+    const execValueOptionsWithCwd = new Set([...execAnalyzeValueOptions, "-C", "--cd", "--add-dir"]);
+    const execOptions = splitLeadingOptions(args, leading.index + 1, execValueOptionsWithCwd);
+    return cwdFromOptionArgs(execOptions.options, cwd);
+  }
+
+  if (command === "resume") {
+    const resumeOptions = splitLeadingOptions(args, leading.index + 1, globalValueOptions);
+    return cwdFromOptionArgs(resumeOptions.options, cwd);
+  }
+
+  return cwd;
+}
+
+function projectTrustConfigArg(codexArgs) {
+  const cwd = cwdFromCodexArgs(codexArgs);
+  return `projects.${JSON.stringify(cwd)}.trust_level="trusted"`;
+}
+
 function baseGlobalArgs(options, codexArgs, extraGlobalArgs = []) {
   const globalArgs = [];
   if (!options.noBypass && !hasSafetyOverride(codexArgs)) {
     globalArgs.push("--dangerously-bypass-approvals-and-sandbox");
+  }
+  if (!options.noTrust) {
+    globalArgs.push("-c", projectTrustConfigArg(codexArgs));
   }
   return [...globalArgs, ...extraGlobalArgs];
 }
@@ -943,6 +995,20 @@ function readSessionMeta(file) {
   }
 }
 
+function tokenCountHasUsageLimit(payload) {
+  const rateLimits = payload?.rate_limits;
+  if (!rateLimits) {
+    return false;
+  }
+  if (rateLimits.credits?.has_credits === false) {
+    return true;
+  }
+  if (rateLimits.rate_limit_reached_type) {
+    return true;
+  }
+  return false;
+}
+
 function latestSessionTurnState(accountHome, options = {}) {
   const file = findLatestSessionFile(accountHome, options);
   if (!file) {
@@ -956,6 +1022,8 @@ function latestSessionTurnState(accountHome, options = {}) {
     sawAssistant: false,
     sawWork: false,
     completed: false,
+    lastAgentMessage: null,
+    usageLimited: false,
   };
 
   let lines;
@@ -984,10 +1052,16 @@ function latestSessionTurnState(accountHome, options = {}) {
       state.sawAssistant = false;
       state.sawWork = false;
       state.completed = false;
+      state.lastAgentMessage = null;
+      state.usageLimited = false;
       continue;
     }
     if (event.type === "event_msg" && payload.type === "task_complete") {
       state.completed = true;
+      state.lastAgentMessage = payload.last_agent_message || null;
+      if (state.lastAgentMessage) {
+        state.sawAssistant = true;
+      }
       continue;
     }
 
@@ -1006,12 +1080,22 @@ function latestSessionTurnState(accountHome, options = {}) {
       state.sawWork = true;
     } else if (event.type === "event_msg" && payload.type === "agent_message") {
       state.sawAssistant = true;
+    } else if (event.type === "event_msg" && payload.type === "token_count" && tokenCountHasUsageLimit(payload)) {
+      state.usageLimited = true;
     }
   }
 
+  const sawTurnContent = state.sawUser || state.sawAssistant || state.sawWork;
+  const completedByUsageLimit =
+    state.completed &&
+    state.sawUser &&
+    !state.sawAssistant &&
+    !state.lastAgentMessage &&
+    (state.usageLimited || options.assumeUsageLimited);
+
   return {
     ...state,
-    incomplete: state.activeTurn && !state.completed && (state.sawUser || state.sawAssistant || state.sawWork),
+    incomplete: state.activeTurn && ((!state.completed && sawTurnContent) || completedByUsageLimit),
   };
 }
 
@@ -1115,7 +1199,7 @@ async function resumeGoalIfNeeded(account, codexArgs) {
 
 function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
   const analysis = analyzeCodexArgs(previousArgs);
-  const sessionState = latestSessionTurnState(accountHome, options);
+  const sessionState = latestSessionTurnState(accountHome, { ...options, assumeUsageLimited: true });
 
   if (!sessionState.file) {
     return [...previousArgs];
