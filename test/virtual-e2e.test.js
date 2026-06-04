@@ -110,6 +110,7 @@ const envBase = {
 for (const key of ["CX_ACCOUNT", "CX_ACCOUNT_COUNT", "CX_ACCOUNT_HOMES", "CX_NO_BYPASS"]) {
   delete envBase[key];
 }
+delete envBase.CX_INTERACTIVE_AUTO_EXEC;
 
 function run(cmd, args, extraEnv = {}) {
   return spawnSync(cmd, args, { cwd: root, env: { ...envBase, ...extraEnv }, encoding: "utf8" });
@@ -230,8 +231,10 @@ function runVirtualE2e() {
   assert.equal(runs.length, 2, JSON.stringify(runs));
   assert.equal(path.basename(runs[0].home), ".codex-account1");
   assert.equal(path.basename(runs[1].home), ".codex-account3");
-  assert.deepEqual(runs[1].args.slice(-2), ["resume", "--last"]);
-  assert.equal(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)), false);
+  assert.ok(runs[1].args.includes("exec"));
+  assert.ok(runs[1].args.includes("resume"));
+  assert.deepEqual(runs[1].args.slice(-2, -1), ["--last"]);
+  assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
 
   clearRecords();
   ok("cxa", ["exec", "implement feature"], { FAKE_LIMIT_ACCOUNT: ".codex-account1" });

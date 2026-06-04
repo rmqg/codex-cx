@@ -177,9 +177,11 @@ codex resume --last
 codex exec resume --last "Continue the interrupted task ..."
 ```
 
-如果上一轮已经完成，`cx` 只恢复会话。如果交互式 `cx` 或 `cxr` 的新指令已经写入 session，但这一轮还没完成，`cx` 仍然只走 `codex resume --last`；未完成的指令会留在共享 session 里。当前 Codex CLI 会把交互式 `resume --last` 后面的额外位置参数当成 session ID，所以这里不会再追加 continuation prompt。
+如果上一轮已经完成，`cx` 只恢复会话。如果交互式 `cx` 或 `cxr` 的新指令已经写入 session，但这一轮还没完成，`cx` 会通过 `codex exec resume --last "Continue ..."` 让下一个账号继续执行这条未完成指令。这样做是为了避开交互式 `codex resume --last` 的参数限制：当前 Codex CLI 会把后面的额外位置参数当成 session ID。恢复出来的 exec turn 完成后 Codex 会退出；如果你想继续在 TUI 里对话，再启动一次 `cxr` 即可。
 
 对 `cx exec ...`，重试会走 `codex exec resume --last "Continue ..."`，保持非交互模式，并显式继续未完成的用户指令。如果原始命令是 `cx exec resume <session-id>`，重试会保留这个显式 session id，而不是改成 `--last`。
+
+设置 `CX_INTERACTIVE_AUTO_EXEC=0` 可以关闭交互式转 exec 的继续行为，改为只用普通 `codex resume --last` 重新打开 TUI。
 
 如果受限进程还没来得及写出本轮 session 文件，`cx` 会在下一个账号上重跑原始命令，而不是盲目恢复某个更旧的 `--last` 会话。
 
@@ -196,6 +198,7 @@ CX_ACCOUNT_HOMES=name=/path,name2=/path2
 CX_NO_BYPASS=1
 CX_LIMIT_TIMEOUT_MS=15000
 CX_AUTO_MAX_SWITCHES=5
+CX_INTERACTIVE_AUTO_EXEC=0
 ```
 
 `CX_ACCOUNT` 等价于 `--account`：它会禁用探测、排序和自动切号，只使用指定账号。
@@ -203,6 +206,8 @@ CX_AUTO_MAX_SWITCHES=5
 `CX_ACCOUNT_COUNT`、`CX_LIMIT_TIMEOUT_MS`、`CX_AUTO_MAX_SWITCHES` 必须是正整数。
 
 默认情况下，`cx` 会在没有显式 sandbox 或 approval 参数时添加 `--dangerously-bypass-approvals-and-sandbox`。可以用 `--no-bypass` 或 `CX_NO_BYPASS=1` 关闭这个默认行为。
+
+默认情况下，交互式 turn 在自动切号后会通过 `codex exec resume ...` 继续未完成任务。设置 `CX_INTERACTIVE_AUTO_EXEC=0` 可以回到旧的保守行为，只用 `codex resume --last` 重新打开 TUI。
 
 ## 故障排查
 

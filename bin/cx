@@ -115,9 +115,9 @@ let terminating = false;
 
 function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.3";
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.4";
   } catch {
-    return "0.5.3";
+    return "0.5.4";
   }
 }
 
@@ -138,6 +138,7 @@ Environment:
   CX_NO_BYPASS=1                                Do not add the bypass flag.
   CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
   CX_AUTO_MAX_SWITCHES=5                        Max automatic account switches per run.
+  CX_INTERACTIVE_AUTO_EXEC=0                    Resume interrupted interactive turns in TUI mode.
 `);
 }
 
@@ -744,6 +745,18 @@ function hasOption(args, name) {
   return args.some((arg) => optionName(arg) === name);
 }
 
+function filterResumePassthroughOptions(args) {
+  return args.filter((arg) => optionName(arg) !== "--last");
+}
+
+function resumeTargetFromOptionsAndRest(options, rest) {
+  const useLast = hasOption(options, "--last") || rest.length === 0;
+  return {
+    prompt: useLast ? rest.join(" ") || null : rest.slice(1).join(" ") || null,
+    resumeTargetArgs: useLast ? ["--last"] : [rest[0]],
+  };
+}
+
 function analyzeCodexArgs(args) {
   const leading = splitLeadingOptions(args, 0, globalValueOptions);
   const command = args[leading.index] || null;
@@ -755,15 +768,17 @@ function analyzeCodexArgs(args) {
       const resumeOptions = splitLeadingOptions(args, execOptions.index + 1, execResumeValueOptions);
       const allResumeOptions = [...execOptions.options, ...resumeOptions.options];
       const rest = args.slice(resumeOptions.index);
-      const useLast = hasOption(allResumeOptions, "--last") || rest.length === 0;
-      const prompt = useLast ? rest.join(" ") || null : rest.slice(1).join(" ") || null;
+      const resumeTarget = resumeTargetFromOptionsAndRest(allResumeOptions, rest);
 
       return {
         mode: "exec",
         globalArgs: leading.options,
-        resumeOptions: filterOptions(allResumeOptions, execResumeSupportedOptions, execAnalyzeValueOptions),
-        resumeTargetArgs: useLast ? ["--last"] : [rest[0]],
-        prompt,
+        resumeOptions: filterOptions(
+          filterResumePassthroughOptions(allResumeOptions),
+          execResumeSupportedOptions,
+          execAnalyzeValueOptions,
+        ),
+        ...resumeTarget,
       };
     }
 
@@ -775,6 +790,18 @@ function analyzeCodexArgs(args) {
       resumeOptions: filterOptions(execOptions.options, execResumeSupportedOptions, execAnalyzeValueOptions),
       resumeTargetArgs: ["--last"],
       prompt,
+    };
+  }
+
+  if (command === "resume") {
+    const resumeOptions = splitLeadingOptions(args, leading.index + 1, globalValueOptions);
+    const rest = args.slice(resumeOptions.index);
+    const resumeTarget = resumeTargetFromOptionsAndRest(resumeOptions.options, rest);
+    return {
+      mode: "interactive",
+      globalArgs: leading.options,
+      resumeOptions: filterResumePassthroughOptions(resumeOptions.options),
+      ...resumeTarget,
     };
   }
 
@@ -924,7 +951,19 @@ function resumeArgsFromAnalysis(analysis, prompt) {
     ];
   }
 
-  return [...analysis.globalArgs, "resume", "--last"];
+  return [...analysis.globalArgs, "resume", ...analysis.resumeOptions, ...(analysis.resumeTargetArgs || ["--last"])];
+}
+
+function execResumeArgsFromInteractiveAnalysis(analysis, prompt) {
+  const resumeOptions = filterOptions(analysis.resumeOptions, execResumeSupportedOptions, execAnalyzeValueOptions);
+  return [
+    ...analysis.globalArgs,
+    "exec",
+    "resume",
+    ...resumeOptions,
+    ...(analysis.resumeTargetArgs || ["--last"]),
+    ...(prompt ? [prompt] : []),
+  ];
 }
 
 function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
@@ -938,7 +977,13 @@ function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
   let prompt = null;
   if (sessionState.incomplete) {
     prompt = continuationPrompt;
+    if (analysis.mode === "interactive" && process.env.CX_INTERACTIVE_AUTO_EXEC !== "0") {
+      return execResumeArgsFromInteractiveAnalysis(analysis, prompt);
+    }
   } else if (!sessionState.completed && analysis.prompt) {
+    if (analysis.mode === "interactive") {
+      return [...previousArgs];
+    }
     prompt = analysis.prompt;
   }
 

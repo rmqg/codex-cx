@@ -38,6 +38,7 @@ function cleanEnv(extra = {}) {
   delete env.CX_ACCOUNT_COUNT;
   delete env.CX_ACCOUNT_HOMES;
   delete env.CX_AUTO_MAX_SWITCHES;
+  delete env.CX_INTERACTIVE_AUTO_EXEC;
   delete env.CX_LIMIT_TIMEOUT_MS;
   return { ...env, ...extra };
 }
@@ -524,9 +525,10 @@ function taskComplete() {
 
   assert.deepEqual(
     retryArgs,
-    ["-m", "gpt-5", "resume", "--last"],
-    "incomplete interactive turns preserve global options and resume without passing the prompt as a session ID",
+    ["-m", "gpt-5", "exec", "resume", "--last", retryArgs.at(-1)],
+    "incomplete interactive turns preserve global options and continue through exec resume",
   );
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
   fs.rmSync(accountHome, { recursive: true, force: true });
 }
@@ -541,8 +543,84 @@ function taskComplete() {
 
   assert.deepEqual(
     retryArgs,
-    ["resume", "--last"],
-    "interactive resume retries must not append a continuation prompt after --last",
+    ["exec", "resume", "--last", retryArgs.at(-1)],
+    "interactive resume retries continue through exec resume instead of passing a prompt to interactive resume",
+  );
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [taskStarted(), userMessage("resume explicit session")]);
+
+  const retryArgs = retryArgsAfterRateLimit(["resume", "019e-interactive-session"], accountHome, {
+    minMtimeMs: Date.now() - 1000,
+  });
+
+  assert.deepEqual(retryArgs.slice(0, 3), ["exec", "resume", "019e-interactive-session"]);
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [taskStarted(), userMessage("resume work")]);
+  const previous = process.env.CX_INTERACTIVE_AUTO_EXEC;
+  process.env.CX_INTERACTIVE_AUTO_EXEC = "0";
+
+  try {
+    const retryArgs = retryArgsAfterRateLimit(["resume", "--last"], accountHome, {
+      minMtimeMs: Date.now() - 1000,
+    });
+
+    assert.deepEqual(
+      retryArgs,
+      ["resume", "--last"],
+      "CX_INTERACTIVE_AUTO_EXEC=0 preserves the conservative TUI resume behavior",
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.CX_INTERACTIVE_AUTO_EXEC;
+    } else {
+      process.env.CX_INTERACTIVE_AUTO_EXEC = previous;
+    }
+    fs.rmSync(accountHome, { recursive: true, force: true });
+  }
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [taskStarted(), userMessage("resume explicit session")]);
+  const previous = process.env.CX_INTERACTIVE_AUTO_EXEC;
+  process.env.CX_INTERACTIVE_AUTO_EXEC = "0";
+
+  try {
+    const retryArgs = retryArgsAfterRateLimit(["resume", "019e-interactive-session"], accountHome, {
+      minMtimeMs: Date.now() - 1000,
+    });
+
+    assert.deepEqual(retryArgs, ["resume", "019e-interactive-session"]);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.CX_INTERACTIVE_AUTO_EXEC;
+    } else {
+      process.env.CX_INTERACTIVE_AUTO_EXEC = previous;
+    }
+    fs.rmSync(accountHome, { recursive: true, force: true });
+  }
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [taskStarted()]);
+
+  assert.deepEqual(
+    retryArgsAfterRateLimit(["finish docs"], accountHome, { minMtimeMs: Date.now() - 1000 }),
+    ["finish docs"],
+    "interactive prompts are replayed when the session exists but the user instruction was not recorded",
   );
 
   fs.rmSync(accountHome, { recursive: true, force: true });

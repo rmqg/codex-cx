@@ -177,9 +177,11 @@ codex resume --last
 codex exec resume --last "Continue the interrupted task ..."
 ```
 
-If the last turn in the current session completed, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, `cx` still uses `codex resume --last`; the pending instruction remains in the shared session. Current Codex CLI versions treat an extra positional argument after interactive `resume --last` as a session ID, so `cx` does not append a continuation prompt there.
+If the last turn in the current session completed, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, `cx` resumes it through `codex exec resume --last "Continue ..."` so the next account continues that pending instruction. This deliberately avoids passing a prompt to interactive `codex resume --last`, because current Codex CLI versions treat that extra positional argument as a session ID. After the resumed exec turn finishes, Codex exits; start `cxr` again if you want to keep chatting in the TUI.
 
 For `cx exec ...`, retries use `codex exec resume --last "Continue ..."` so non-interactive sessions keep their mode and can explicitly continue the pending instruction. If the original command was `cx exec resume <session-id>`, the retry keeps that explicit session id instead of switching to `--last`.
+
+Set `CX_INTERACTIVE_AUTO_EXEC=0` to disable the interactive-to-exec continuation behavior and reopen the TUI with plain `codex resume --last` instead.
 
 If the limited process did not create a current session file, `cx` retries the original command on the next account instead of blindly resuming an unrelated older session.
 
@@ -196,6 +198,7 @@ CX_ACCOUNT_HOMES=name=/path,name2=/path2
 CX_NO_BYPASS=1
 CX_LIMIT_TIMEOUT_MS=15000
 CX_AUTO_MAX_SWITCHES=5
+CX_INTERACTIVE_AUTO_EXEC=0
 ```
 
 `CX_ACCOUNT` behaves like `--account`: it disables probing, sorting, and auto-switching and uses only the selected account.
@@ -203,6 +206,8 @@ CX_AUTO_MAX_SWITCHES=5
 `CX_ACCOUNT_COUNT`, `CX_LIMIT_TIMEOUT_MS`, and `CX_AUTO_MAX_SWITCHES` must be positive integers.
 
 By default, `cx` adds `--dangerously-bypass-approvals-and-sandbox` unless a sandbox or approval option is already present. Use `--no-bypass` or `CX_NO_BYPASS=1` to disable that default.
+
+By default, interrupted interactive turns continue through `codex exec resume ...` after an automatic account switch. Set `CX_INTERACTIVE_AUTO_EXEC=0` to keep the older conservative behavior, which only reopens the TUI with `codex resume --last`.
 
 ## Troubleshooting
 
