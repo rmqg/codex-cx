@@ -122,9 +122,9 @@ let terminating = false;
 
 function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.5";
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.6";
   } catch {
-    return "0.5.5";
+    return "0.5.6";
   }
 }
 
@@ -143,6 +143,7 @@ Environment:
   CX_ACCOUNT_COUNT=N                            Probe ~/.codex-account1..N.
   CX_ACCOUNT_HOMES=/path/a,/path/b              Explicit comma-separated CODEX_HOME list.
   CX_NO_BYPASS=1                                Do not add the bypass flag.
+  CX_AUTO_RESUME_GOAL=0                         Do not reactivate paused/limited goals before resume.
   CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
   CX_AUTO_MAX_SWITCHES=5                        Max automatic account switches per run.
   CX_INTERACTIVE_AUTO_EXEC=0                    Resume interrupted interactive turns in TUI mode.
@@ -392,14 +393,21 @@ function accountMatches(account, selector, accounts = getDefaultAccounts()) {
 }
 
 function readRateLimits(account) {
-  return new Promise((resolve) => {
-    const authPath = path.join(account.home, "auth.json");
-    if (!fs.existsSync(authPath)) {
-      resolve({ account, ok: false, error: `missing ${authPath}` });
-      return;
-    }
+  const authPath = path.join(account.home, "auth.json");
+  if (!fs.existsSync(authPath)) {
+    return Promise.resolve({ account, ok: false, error: `missing ${authPath}` });
+  }
 
-    const env = { ...process.env, CODEX_HOME: account.home };
+  return appServerRequest(account.home, "account/rateLimits/read", null)
+    .then((result) => ({ account, ok: true, limits: extractCodexLimit(result) }))
+    .catch((error) => ({ account, ok: false, error: error.message || "rate-limit read failed" }));
+}
+
+function appServerRequest(accountHome, method, params, options = {}) {
+  return new Promise((resolve, reject) => {
+    const timeoutMs = options.timeoutMs || getRuntimeConfig().timeoutMs;
+
+    const env = { ...process.env, CODEX_HOME: accountHome };
     delete env.CODEX_THREAD_ID;
 
     const child = spawn("codex", ["app-server", "--listen", "stdio://"], {
@@ -410,13 +418,12 @@ function readRateLimits(account) {
     let buffer = "";
     let stderr = "";
     let settled = false;
-    const { timeoutMs } = getRuntimeConfig();
 
     const timer = setTimeout(() => {
-      finish({ account, ok: false, error: `timeout after ${timeoutMs}ms` });
+      finish(new Error(`timeout after ${timeoutMs}ms`));
     }, timeoutMs);
 
-    function finish(result) {
+    function finish(error, result) {
       if (settled) {
         return;
       }
@@ -425,14 +432,18 @@ function readRateLimits(account) {
       if (!child.killed) {
         child.kill("SIGTERM");
       }
-      resolve(result);
+      if (error) {
+        reject(error);
+      } else {
+        resolve(result);
+      }
     }
 
     function send(message) {
       child.stdin.write(`${JSON.stringify(message)}\n`);
     }
 
-    child.on("error", (error) => finish({ account, ok: false, error: error.message }));
+    child.on("error", (error) => finish(error));
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
       if (stderr.length > 4000) {
@@ -441,7 +452,7 @@ function readRateLimits(account) {
     });
     child.on("exit", (code) => {
       if (!settled && code !== 0) {
-        finish({ account, ok: false, error: stderr.trim() || `codex app-server exited ${code}` });
+        finish(new Error(stderr.trim() || `codex app-server exited ${code}`));
       }
     });
     child.stdout.on("data", (chunk) => {
@@ -463,20 +474,25 @@ function readRateLimits(account) {
         try {
           message = JSON.parse(line);
         } catch (error) {
-          finish({ account, ok: false, error: `invalid JSON-RPC response: ${error.message}` });
+          finish(new Error(`invalid JSON-RPC response: ${error.message}`));
           return;
         }
 
         if (message.id === "init") {
-          send({ id: "limits", method: "account/rateLimits/read", params: null });
+          if (message.error) {
+            finish(new Error(message.error.message || "app-server initialize failed"));
+            return;
+          }
+          send({ method: "initialized", params: {} });
+          send({ id: "request", method, params });
           continue;
         }
 
-        if (message.id === "limits") {
+        if (message.id === "request") {
           if (message.error) {
-            finish({ account, ok: false, error: message.error.message || "rate-limit read failed" });
+            finish(new Error(message.error.message || `${method} failed`));
           } else {
-            finish({ account, ok: true, limits: extractCodexLimit(message.result) });
+            finish(null, message.result);
           }
           return;
         }
@@ -752,6 +768,19 @@ function hasOption(args, name) {
   return args.some((arg) => optionName(arg) === name);
 }
 
+function isResumeInvocation(args) {
+  const leading = splitLeadingOptions(args, 0, globalValueOptions);
+  const command = args[leading.index] || null;
+  if (command === "resume") {
+    return true;
+  }
+  if (command !== "exec" && command !== "e") {
+    return false;
+  }
+  const execOptions = splitLeadingOptions(args, leading.index + 1, execAnalyzeValueOptions);
+  return args[execOptions.index] === "resume";
+}
+
 function filterResumePassthroughOptions(args) {
   return args.filter((arg) => optionName(arg) !== "--last");
 }
@@ -834,6 +863,7 @@ function analyzeCodexArgs(args) {
 function findLatestSessionFile(accountHome, options = {}) {
   const root = path.join(accountHome, "sessions");
   const minMtimeMs = options.minMtimeMs || 0;
+  const cwd = options.cwd ? path.resolve(options.cwd) : null;
   const stack = [root];
   let latest = null;
 
@@ -866,12 +896,51 @@ function findLatestSessionFile(accountHome, options = {}) {
         continue;
       }
       if (!latest || stat.mtimeMs > latest.mtimeMs) {
+        if (cwd) {
+          const meta = readSessionMeta(target);
+          if (!meta.cwd || path.resolve(meta.cwd) !== cwd) {
+            continue;
+          }
+        }
         latest = { file: target, mtimeMs: stat.mtimeMs };
       }
     }
   }
 
   return latest?.file || null;
+}
+
+function readSessionMeta(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, "r");
+    const buffer = Buffer.alloc(1024 * 1024);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const firstLine = buffer.subarray(0, bytesRead).toString("utf8").split(/\r?\n/, 1)[0];
+    if (!firstLine.trim()) {
+      return {};
+    }
+
+    const event = JSON.parse(firstLine);
+    const payload = event.payload || event;
+    if (event.type !== "session_meta" && payload.type !== "session_meta") {
+      return {};
+    }
+    return {
+      id: payload.id || null,
+      cwd: payload.cwd || null,
+    };
+  } catch {
+    return {};
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Ignore close failures while reading optional metadata.
+      }
+    }
+  }
 }
 
 function latestSessionTurnState(accountHome, options = {}) {
@@ -971,6 +1040,77 @@ function execResumeArgsFromInteractiveAnalysis(analysis, prompt) {
     ...(analysis.resumeTargetArgs || ["--last"]),
     ...(prompt ? [prompt] : []),
   ];
+}
+
+function cwdFromGlobalArgs(globalArgs) {
+  let cwd = process.cwd();
+  for (let index = 0; index < globalArgs.length; index += 1) {
+    const arg = globalArgs[index];
+    if (arg === "-C" || arg === "--cd") {
+      if (globalArgs[index + 1]) {
+        cwd = expandHomePath(globalArgs[index + 1]);
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("--cd=")) {
+      cwd = expandHomePath(arg.slice("--cd=".length));
+    }
+  }
+  return path.resolve(cwd);
+}
+
+function isUuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
+function resolveResumeThreadId(accountHome, analysis) {
+  const targetArgs = analysis.resumeTargetArgs || ["--last"];
+  const target = targetArgs[0];
+  if (target && target !== "--last") {
+    return isUuidLike(target) ? target : null;
+  }
+
+  const file = findLatestSessionFile(accountHome, {
+    cwd: hasOption(analysis.resumeOptions || [], "--all") ? null : cwdFromGlobalArgs(analysis.globalArgs || []),
+  });
+  return file ? readSessionMeta(file).id || null : null;
+}
+
+function shouldResumeGoalStatus(status) {
+  return status === "paused" || status === "usageLimited" || status === "blocked";
+}
+
+async function resumeGoalIfNeeded(account, codexArgs) {
+  if (process.env.CX_AUTO_RESUME_GOAL === "0" || !isResumeInvocation(codexArgs)) {
+    return;
+  }
+
+  const analysis = analyzeCodexArgs(codexArgs);
+  const threadId = resolveResumeThreadId(account.home, analysis);
+  if (!threadId) {
+    return;
+  }
+
+  let result;
+  try {
+    result = await appServerRequest(account.home, "thread/goal/get", { threadId });
+  } catch (error) {
+    console.error(`[cx-auto] goal status check failed: ${error.message}`);
+    return;
+  }
+
+  const goal = result?.goal || null;
+  if (!goal || !shouldResumeGoalStatus(goal.status)) {
+    return;
+  }
+
+  try {
+    await appServerRequest(account.home, "thread/goal/set", { threadId, status: "active" });
+    console.error(`[cx-auto] resumed ${goal.status} goal for ${threadId}.`);
+  } catch (error) {
+    console.error(`[cx-auto] goal resume failed: ${error.message}`);
+  }
 }
 
 function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
@@ -1170,6 +1310,7 @@ async function runForced(options, codexArgs, account) {
     return 0;
   }
 
+  await resumeGoalIfNeeded(account, codexArgs);
   const result = await runCodex(account, commandArgs);
   if (result.signal && terminating) {
     return 130;
@@ -1217,6 +1358,7 @@ async function runAuto(options, initialArgs) {
       return 0;
     }
 
+    await resumeGoalIfNeeded(selected.account, codexArgs);
     const runStartedAt = Date.now() - 2000;
     const result = await runCodexMonitored(selected.account, commandArgs, logDir);
     if (terminating) {
@@ -1276,12 +1418,16 @@ module.exports = {
   compareAccountResults,
   isUsable,
   isUsageLimitLogLine,
+  isResumeInvocation,
   latestSessionTurnState,
   limitExhaustedReason,
   logChunkHasUsageLimit,
+  readSessionMeta,
   normalizeReachedReason,
+  resolveResumeThreadId,
   retryArgsAfterRateLimit,
   reached,
+  shouldResumeGoalStatus,
   selectResult,
   usedPercent,
 };

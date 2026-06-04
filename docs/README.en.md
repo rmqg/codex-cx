@@ -187,6 +187,8 @@ If the last turn in the current session completed, `cx` only resumes the session
 
 For `cx exec ...`, retries use `codex exec resume --last "Continue ..."` so non-interactive sessions keep their mode and can explicitly continue the pending instruction. If the original command was `cx exec resume <session-id>`, the retry keeps that explicit session id instead of switching to `--last`.
 
+For `cx resume ...`, `cxr`, and `cx exec resume ...`, `cx` checks the target session for a paused, usage-limited, or blocked goal before launching Codex. If one exists, it uses Codex app-server to mark the goal active, then continues with the original command; if there is no goal or the goal is complete, the existing resume behavior is unchanged.
+
 Set `CX_INTERACTIVE_AUTO_EXEC=0` to disable the interactive-to-exec continuation behavior and reopen the TUI with plain `codex resume --last` instead.
 
 If the limited process did not create a current session file, `cx` retries the original command on the next account instead of blindly resuming an unrelated older session.
@@ -202,6 +204,7 @@ CX_ACCOUNT=1|account1|work
 CX_ACCOUNT_COUNT=N
 CX_ACCOUNT_HOMES=name=/path,name2=/path2
 CX_NO_BYPASS=1
+CX_AUTO_RESUME_GOAL=0
 CX_LIMIT_TIMEOUT_MS=15000
 CX_AUTO_MAX_SWITCHES=5
 CX_INTERACTIVE_AUTO_EXEC=0
@@ -212,6 +215,8 @@ CX_INTERACTIVE_AUTO_EXEC=0
 `CX_ACCOUNT_COUNT`, `CX_LIMIT_TIMEOUT_MS`, and `CX_AUTO_MAX_SWITCHES` must be positive integers.
 
 By default, `cx` adds `--dangerously-bypass-approvals-and-sandbox` unless a sandbox or approval option is already present. Use `--no-bypass` or `CX_NO_BYPASS=1` to disable that default.
+
+By default, resume commands automatically reactivate paused, usage-limited, or blocked goals. Set `CX_AUTO_RESUME_GOAL=0` to disable this preflight.
 
 By default, interrupted interactive turns continue through `codex exec resume ...` after an automatic account switch. Set `CX_INTERACTIVE_AUTO_EXEC=0` to keep the older conservative behavior, which only reopens the TUI with `codex resume --last`.
 

@@ -24,6 +24,7 @@ const records = process.env.FAKE_RECORDS;
 function append(data) { if (records) fs.appendFileSync(records, JSON.stringify(data) + '\\n'); }
 function send(data) { process.stdout.write(JSON.stringify(data) + '\\n'); }
 function limits() { return JSON.parse(process.env.FAKE_LIMITS || '{}')[account] || { p: 99, s: 99, r: '' }; }
+function goals() { return JSON.parse(process.env.FAKE_GOALS || '{}')[account] || {}; }
 function logDir() {
   const index = args.findIndex((arg) => arg === '-c');
   const value = index >= 0 ? args[index + 1] : args.find((arg) => arg.startsWith('log_dir='));
@@ -65,6 +66,32 @@ if (args[0] === 'app-server') {
           secondary: { usedPercent: x.s },
           rateLimitReachedType: x.r || ''
         } } } });
+      }
+      if (msg.method === 'thread/goal/get') {
+        const status = goals()[msg.params.threadId];
+        send({ id: msg.id, result: { goal: status ? {
+          threadId: msg.params.threadId,
+          objective: 'fake goal',
+          status,
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1,
+          updatedAt: 1
+        } : null } });
+      }
+      if (msg.method === 'thread/goal/set') {
+        append({ type: 'goal-set', home, params: msg.params });
+        send({ id: msg.id, result: { goal: {
+          threadId: msg.params.threadId,
+          objective: 'fake goal',
+          status: msg.params.status || 'active',
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1,
+          updatedAt: 2
+        } } });
       }
     }
   });
@@ -117,7 +144,7 @@ const envBase = {
   CX_AUTO_MAX_SWITCHES: "6",
 };
 
-for (const key of ["CX_ACCOUNT", "CX_ACCOUNT_COUNT", "CX_ACCOUNT_HOMES", "CX_NO_BYPASS"]) {
+for (const key of ["CX_ACCOUNT", "CX_ACCOUNT_COUNT", "CX_ACCOUNT_HOMES", "CX_AUTO_RESUME_GOAL", "CX_NO_BYPASS"]) {
   delete envBase[key];
 }
 delete envBase.CX_INTERACTIVE_AUTO_EXEC;
@@ -146,6 +173,23 @@ function clearRecords() {
 function assertLink(link, target) {
   assert.equal(fs.lstatSync(link).isSymbolicLink(), true, `${link} should be symlink`);
   assert.equal(path.resolve(path.dirname(link), fs.readlinkSync(link)), target, `${link} target`);
+}
+
+function writeSharedSession(threadId, cwd = root) {
+  const dir = path.join(root, ".codex", "sessions", "2026", "06", "04");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `rollout-2026-06-04T00-00-00-${threadId}.jsonl`);
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      type: "session_meta",
+      payload: { id: threadId, cwd },
+    }) + "\n",
+  );
+  const now = new Date();
+  fs.utimesSync(file, now, now);
+  return file;
 }
 
 function runVirtualE2e() {
@@ -239,6 +283,26 @@ function runVirtualE2e() {
   result = run("cxa", ["exec", "mentions out-of-credits text"], { FAKE_OUT_OF_CREDITS_TOOL_TEXT_LOG: "1" });
   assert.equal(result.status, 7, result.stderr);
   assert.equal(readRecords().filter((entry) => entry.type === "run").length, 1);
+
+  const pausedGoalThreadId = "019eaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee";
+  writeSharedSession(pausedGoalThreadId);
+  clearRecords();
+  ok("cxa", ["resume", "--last"], {
+    FAKE_GOALS: JSON.stringify({ ".codex-account1": { [pausedGoalThreadId]: "paused" } }),
+  });
+  let goalSets = readRecords().filter((entry) => entry.type === "goal-set");
+  assert.equal(goalSets.length, 1, JSON.stringify(goalSets));
+  assert.deepEqual(goalSets[0].params, { threadId: pausedGoalThreadId, status: "active" });
+
+  const disabledGoalThreadId = "019eaaaa-bbbb-7ccc-8ddd-ffffffffffff";
+  writeSharedSession(disabledGoalThreadId);
+  clearRecords();
+  ok("cxa", ["resume", "--last"], {
+    CX_AUTO_RESUME_GOAL: "0",
+    FAKE_GOALS: JSON.stringify({ ".codex-account1": { [disabledGoalThreadId]: "paused" } }),
+  });
+  goalSets = readRecords().filter((entry) => entry.type === "goal-set");
+  assert.equal(goalSets.length, 0, JSON.stringify(goalSets));
 
   clearRecords();
   ok("cxa", ["resume", "--last"], { FAKE_LIMIT_ACCOUNT: ".codex-account1" });

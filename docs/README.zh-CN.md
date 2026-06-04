@@ -187,6 +187,8 @@ codex exec resume --last "Continue the interrupted task ..."
 
 对 `cx exec ...`，重试会走 `codex exec resume --last "Continue ..."`，保持非交互模式，并显式继续未完成的用户指令。如果原始命令是 `cx exec resume <session-id>`，重试会保留这个显式 session id，而不是改成 `--last`。
 
+对 `cx resume ...`、`cxr` 和 `cx exec resume ...`，`cx` 会在启动 Codex 前检查目标 session 是否有 paused、usage-limited 或 blocked goal。如果有，它会通过 Codex app-server 把该 goal 恢复为 active，然后再按原命令继续；如果没有 goal 或 goal 已完成，则保持现有恢复逻辑不变。
+
 设置 `CX_INTERACTIVE_AUTO_EXEC=0` 可以关闭交互式转 exec 的继续行为，改为只用普通 `codex resume --last` 重新打开 TUI。
 
 如果受限进程还没来得及写出本轮 session 文件，`cx` 会在下一个账号上重跑原始命令，而不是盲目恢复某个更旧的 `--last` 会话。
@@ -202,6 +204,7 @@ CX_ACCOUNT=1|account1|work
 CX_ACCOUNT_COUNT=N
 CX_ACCOUNT_HOMES=name=/path,name2=/path2
 CX_NO_BYPASS=1
+CX_AUTO_RESUME_GOAL=0
 CX_LIMIT_TIMEOUT_MS=15000
 CX_AUTO_MAX_SWITCHES=5
 CX_INTERACTIVE_AUTO_EXEC=0
@@ -212,6 +215,8 @@ CX_INTERACTIVE_AUTO_EXEC=0
 `CX_ACCOUNT_COUNT`、`CX_LIMIT_TIMEOUT_MS`、`CX_AUTO_MAX_SWITCHES` 必须是正整数。
 
 默认情况下，`cx` 会在没有显式 sandbox 或 approval 参数时添加 `--dangerously-bypass-approvals-and-sandbox`。可以用 `--no-bypass` 或 `CX_NO_BYPASS=1` 关闭这个默认行为。
+
+默认情况下，resume 命令会自动恢复 paused、usage-limited 或 blocked goal。设置 `CX_AUTO_RESUME_GOAL=0` 可以关闭这个预处理。
 
 默认情况下，交互式 turn 在自动切号后会通过 `codex exec resume ...` 继续未完成任务。设置 `CX_INTERACTIVE_AUTO_EXEC=0` 可以回到旧的保守行为，只用 `codex resume --last` 重新打开 TUI。
 

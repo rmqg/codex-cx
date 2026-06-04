@@ -8,8 +8,10 @@ const path = require("path");
 const {
   isUsable,
   isUsageLimitLogLine,
+  isResumeInvocation,
   limitExhaustedReason,
   logChunkHasUsageLimit,
+  shouldResumeGoalStatus,
   retryArgsAfterRateLimit,
   selectResult,
 } = require("../bin/cx");
@@ -221,6 +223,21 @@ function taskComplete() {
     ),
     true,
   );
+}
+
+{
+  assert.equal(isResumeInvocation(["resume", "--last"]), true);
+  assert.equal(isResumeInvocation(["exec", "resume", "--last"]), true);
+  assert.equal(isResumeInvocation(["e", "--json", "resume", "--last"]), true);
+  assert.equal(isResumeInvocation(["exec", "implement feature"]), false);
+  assert.equal(isResumeInvocation(["finish docs"]), false);
+
+  assert.equal(shouldResumeGoalStatus("paused"), true);
+  assert.equal(shouldResumeGoalStatus("usageLimited"), true);
+  assert.equal(shouldResumeGoalStatus("blocked"), true);
+  assert.equal(shouldResumeGoalStatus("active"), false);
+  assert.equal(shouldResumeGoalStatus("complete"), false);
+  assert.equal(shouldResumeGoalStatus("budgetLimited"), false);
 }
 
 {
