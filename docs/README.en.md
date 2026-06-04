@@ -152,7 +152,7 @@ cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
 
 `--force` moves existing paths aside without copying them first. Use it only when you know the existing data is disposable.
 
-`cx-setup` refuses to modify account homes that are currently used by running Codex processes. Exit those sessions first. `--dry-run` is always safe. `--allow-active` bypasses the guard, but it is risky with `--full` because SQLite/state files can be open while they are moved.
+`cx-setup` refuses to modify account homes that are currently used by running Codex processes. Exit those sessions first. `--dry-run` is always safe. `--allow-active` bypasses the guard, but it is risky with `--full` because SQLite/state files can be open while they are moved. After `--full`, avoid running multiple Codex instances that write state at the same time unless you accept the usual shared-SQLite concurrency risk.
 
 ## Selection Policy
 
@@ -179,7 +179,7 @@ codex exec resume --last "Continue the interrupted task ..."
 
 If the last turn in the current session completed, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, `cx` still uses `codex resume --last`; the pending instruction remains in the shared session. Current Codex CLI versions treat an extra positional argument after interactive `resume --last` as a session ID, so `cx` does not append a continuation prompt there.
 
-For `cx exec ...`, retries use `codex exec resume --last "Continue ..."` so non-interactive sessions keep their mode and can explicitly continue the pending instruction.
+For `cx exec ...`, retries use `codex exec resume --last "Continue ..."` so non-interactive sessions keep their mode and can explicitly continue the pending instruction. If the original command was `cx exec resume <session-id>`, the retry keeps that explicit session id instead of switching to `--last`.
 
 If the limited process did not create a current session file, `cx` retries the original command on the next account instead of blindly resuming an unrelated older session.
 

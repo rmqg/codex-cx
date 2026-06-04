@@ -152,7 +152,7 @@ cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
 
 `--force` 会直接把已有路径移到备份里，不先复制。只有你确定旧数据不需要时再用。
 
-`cx-setup` 默认拒绝修改正在被 Codex 进程使用的账号目录。请先退出这些 Codex 会话再执行真实迁移。`--dry-run` 始终安全；`--allow-active` 可以绕过保护，但在 `--full` 模式下风险较高，因为 sqlite/state 文件可能正在被打开。
+`cx-setup` 默认拒绝修改正在被 Codex 进程使用的账号目录。请先退出这些 Codex 会话再执行真实迁移。`--dry-run` 始终安全；`--allow-active` 可以绕过保护，但在 `--full` 模式下风险较高，因为 sqlite/state 文件可能正在被打开。执行 `--full` 后，除非你能接受共享 SQLite 的并发风险，否则不要同时运行多个会写入 state 的 Codex 实例。
 
 ## 选择策略
 
@@ -179,7 +179,7 @@ codex exec resume --last "Continue the interrupted task ..."
 
 如果上一轮已经完成，`cx` 只恢复会话。如果交互式 `cx` 或 `cxr` 的新指令已经写入 session，但这一轮还没完成，`cx` 仍然只走 `codex resume --last`；未完成的指令会留在共享 session 里。当前 Codex CLI 会把交互式 `resume --last` 后面的额外位置参数当成 session ID，所以这里不会再追加 continuation prompt。
 
-对 `cx exec ...`，重试会走 `codex exec resume --last "Continue ..."`，保持非交互模式，并显式继续未完成的用户指令。
+对 `cx exec ...`，重试会走 `codex exec resume --last "Continue ..."`，保持非交互模式，并显式继续未完成的用户指令。如果原始命令是 `cx exec resume <session-id>`，重试会保留这个显式 session id，而不是改成 `--last`。
 
 如果受限进程还没来得及写出本轮 session 文件，`cx` 会在下一个账号上重跑原始命令，而不是盲目恢复某个更旧的 `--last` 会话。
 

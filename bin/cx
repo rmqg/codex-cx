@@ -86,6 +86,7 @@ const execAnalyzeValueOptions = new Set([...execResumeValueOptions, "--color"]);
 const execResumeSupportedOptions = new Set([
   "--dangerously-bypass-approvals-and-sandbox",
   "--dangerously-bypass-hook-trust",
+  "--all",
   "--disable",
   "--enable",
   "--ephemeral",
@@ -114,9 +115,9 @@ let terminating = false;
 
 function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.2";
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.3";
   } catch {
-    return "0.5.2";
+    return "0.5.3";
   }
 }
 
@@ -739,6 +740,10 @@ function filterOptions(args, supportedOptions, valueOptions) {
   return filtered;
 }
 
+function hasOption(args, name) {
+  return args.some((arg) => optionName(arg) === name);
+}
+
 function analyzeCodexArgs(args) {
   const leading = splitLeadingOptions(args, 0, globalValueOptions);
   const command = args[leading.index] || null;
@@ -746,12 +751,29 @@ function analyzeCodexArgs(args) {
   if (command === "exec" || command === "e") {
     const execOptions = splitLeadingOptions(args, leading.index + 1, execAnalyzeValueOptions);
     const execCommand = args[execOptions.index] || null;
+    if (execCommand === "resume") {
+      const resumeOptions = splitLeadingOptions(args, execOptions.index + 1, execResumeValueOptions);
+      const allResumeOptions = [...execOptions.options, ...resumeOptions.options];
+      const rest = args.slice(resumeOptions.index);
+      const useLast = hasOption(allResumeOptions, "--last") || rest.length === 0;
+      const prompt = useLast ? rest.join(" ") || null : rest.slice(1).join(" ") || null;
+
+      return {
+        mode: "exec",
+        globalArgs: leading.options,
+        resumeOptions: filterOptions(allResumeOptions, execResumeSupportedOptions, execAnalyzeValueOptions),
+        resumeTargetArgs: useLast ? ["--last"] : [rest[0]],
+        prompt,
+      };
+    }
+
     const prompt =
       execCommand && execSubcommands.has(execCommand) ? null : args.slice(execOptions.index).join(" ") || null;
     return {
       mode: "exec",
       globalArgs: leading.options,
       resumeOptions: filterOptions(execOptions.options, execResumeSupportedOptions, execAnalyzeValueOptions),
+      resumeTargetArgs: ["--last"],
       prompt,
     };
   }
@@ -761,6 +783,7 @@ function analyzeCodexArgs(args) {
       mode: "interactive",
       globalArgs: leading.options,
       resumeOptions: [],
+      resumeTargetArgs: ["--last"],
       prompt: null,
     };
   }
@@ -769,6 +792,7 @@ function analyzeCodexArgs(args) {
     mode: "interactive",
     globalArgs: leading.options,
     resumeOptions: [],
+    resumeTargetArgs: ["--last"],
     prompt: args.slice(leading.index).join(" ") || null,
   };
 }
@@ -895,7 +919,7 @@ function resumeArgsFromAnalysis(analysis, prompt) {
       "exec",
       "resume",
       ...analysis.resumeOptions,
-      "--last",
+      ...(analysis.resumeTargetArgs || ["--last"]),
       ...(prompt ? [prompt] : []),
     ];
   }

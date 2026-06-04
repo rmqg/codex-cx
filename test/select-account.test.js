@@ -448,6 +448,56 @@ function taskComplete() {
 
 {
   const accountHome = tempAccountHome();
+  writeSession(accountHome, [taskStarted(), userMessage("resume specific session")]);
+
+  const retryArgs = retryArgsAfterRateLimit(["exec", "resume", "019e-specific-session"], accountHome, {
+    minMtimeMs: Date.now() - 1000,
+  });
+
+  assert.deepEqual(retryArgs.slice(0, 3), ["exec", "resume", "019e-specific-session"]);
+  assert.match(
+    retryArgs.at(-1),
+    /Continue the interrupted task/,
+    "incomplete exec resume turns preserve the explicit session id",
+  );
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [taskStarted(), userMessage("resume specific session")]);
+
+  const retryArgs = retryArgsAfterRateLimit(
+    ["exec", "resume", "--json", "019e-specific-session", "original prompt"],
+    accountHome,
+    {
+      minMtimeMs: Date.now() - 1000,
+    },
+  );
+
+  assert.deepEqual(retryArgs.slice(0, 4), ["exec", "resume", "--json", "019e-specific-session"]);
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [taskStarted(), userMessage("resume latest session")]);
+
+  const retryArgs = retryArgsAfterRateLimit(["exec", "resume", "--last"], accountHome, {
+    minMtimeMs: Date.now() - 1000,
+  });
+
+  assert.deepEqual(retryArgs.slice(0, 3), ["exec", "resume", "--last"]);
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
   writeSession(accountHome, [taskStarted(), userMessage("implement feature")]);
 
   const retryArgs = retryArgsAfterRateLimit(["exec", "--color", "never", "--json", "implement feature"], accountHome, {
