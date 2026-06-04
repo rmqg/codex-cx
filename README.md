@@ -13,6 +13,8 @@ Small account-switching wrappers for the OpenAI Codex CLI.
 npm install -g github:rmqg/codex-cx
 ```
 
+Run the same command again to update an existing global install.
+
 ## Commands
 
 ```sh

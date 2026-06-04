@@ -182,6 +182,15 @@ function taskComplete() {
     ),
     true,
   );
+  assert.equal(
+    isUsageLimitLogLine(
+      "2026-06-04T03:28:15.620801Z  INFO session_loop{thread_id=019e907c}:turn{model=gpt-5.5}: codex_core::session::turn: Turn error: Your workspace is out of credits. Add credits to continue.",
+    ),
+    true,
+  );
+  assert.equal(isUsageLimitLogLine("■ Your workspace is out of credits. Add credits to continue."), true);
+  assert.equal(isUsageLimitLogLine("2026-06-04T03:28:15.620801Z  INFO codex_tui: Goal hit usage limits (/goal resume)"), true);
+  assert.equal(isUsageLimitLogLine("Goal hit usage limits (/goal resume)"), false);
   assert.equal(isUsageLimitLogLine("ERROR: unexpected status 429 Too Many Requests"), true);
   assert.equal(
     isUsageLimitLogLine(
@@ -189,6 +198,13 @@ function taskComplete() {
     ),
     false,
   );
+  assert.equal(
+    isUsageLimitLogLine(
+      '2026-06-04T01:00:00Z INFO codex_core::stream_events_utils: ToolCall: exec_command {"cmd":"printf \\"Your workspace is out of credits\\""}',
+    ),
+    false,
+  );
+  assert.equal(isUsageLimitLogLine("+Goal hit usage limits (/goal resume)"), false);
   assert.equal(
     isUsageLimitLogLine(
       "2026-06-04T01:00:00Z ERROR codex_tui: Error finding conversation path: Continue the interrupted task after a usage limit.",

@@ -79,9 +79,19 @@ if (args[0] === 'app-server') {
     writeLog('2026-06-04T01:00:00Z INFO codex_core::stream_events_utils: ToolCall: exec_command {"cmd":"rg ' + first + ' ' + second + ' /tmp"}');
     process.exit(7);
   }
+  if (process.env.FAKE_OUT_OF_CREDITS_TOOL_TEXT_LOG === '1') {
+    writeLog('2026-06-04T01:00:00Z INFO codex_core::stream_events_utils: ToolCall: exec_command {"cmd":"printf \\"Your workspace is out of credits\\""}');
+    process.exit(7);
+  }
   if (account === process.env.FAKE_LIMIT_ACCOUNT) {
     writeIncompleteSession();
-    writeLog('2026-06-04T01:00:00Z ERROR session_loop: Turn error: workspace_owner_credits_depleted');
+    if (process.env.FAKE_LIMIT_LOG === 'out-of-credits') {
+      writeLog('2026-06-04T03:28:15.620801Z  INFO session_loop{thread_id=019e907c}:turn{model=gpt-5.5}: codex_core::session::turn: Turn error: Your workspace is out of credits. Add credits to continue.');
+    } else if (process.env.FAKE_LIMIT_LOG === 'goal') {
+      writeLog('2026-06-04T03:28:15.620801Z  INFO codex_tui: Goal hit usage limits (/goal resume)');
+    } else {
+      writeLog('2026-06-04T01:00:00Z ERROR session_loop: Turn error: workspace_owner_credits_depleted');
+    }
     process.exit(0);
   }
   process.exit(0);
@@ -226,6 +236,11 @@ function runVirtualE2e() {
   assert.equal(readRecords().filter((entry) => entry.type === "run").length, 1);
 
   clearRecords();
+  result = run("cxa", ["exec", "mentions out-of-credits text"], { FAKE_OUT_OF_CREDITS_TOOL_TEXT_LOG: "1" });
+  assert.equal(result.status, 7, result.stderr);
+  assert.equal(readRecords().filter((entry) => entry.type === "run").length, 1);
+
+  clearRecords();
   ok("cxa", ["resume", "--last"], { FAKE_LIMIT_ACCOUNT: ".codex-account1" });
   let runs = readRecords().filter((entry) => entry.type === "run");
   assert.equal(runs.length, 2, JSON.stringify(runs));
@@ -237,13 +252,25 @@ function runVirtualE2e() {
   assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
 
   clearRecords();
-  ok("cxa", ["exec", "implement feature"], { FAKE_LIMIT_ACCOUNT: ".codex-account1" });
+  ok("cxa", ["exec", "implement feature"], {
+    FAKE_LIMIT_ACCOUNT: ".codex-account1",
+    FAKE_LIMIT_LOG: "out-of-credits",
+  });
   runs = readRecords().filter((entry) => entry.type === "run");
   assert.equal(runs.length, 2, JSON.stringify(runs));
   assert.equal(path.basename(runs[1].home), ".codex-account3");
   assert.ok(runs[1].args.includes("exec"));
   assert.ok(runs[1].args.includes("resume"));
   assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
+
+  clearRecords();
+  ok("cxa", ["exec", "finish goal"], {
+    FAKE_LIMIT_ACCOUNT: ".codex-account1",
+    FAKE_LIMIT_LOG: "goal",
+  });
+  runs = readRecords().filter((entry) => entry.type === "run");
+  assert.equal(runs.length, 2, JSON.stringify(runs));
+  assert.equal(path.basename(runs[1].home), ".codex-account3");
 }
 
 try {

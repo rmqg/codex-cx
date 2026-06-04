@@ -12,6 +12,12 @@
 npm install -g github:rmqg/codex-cx
 ```
 
+已安装过时，用同一条命令更新全局版本：
+
+```sh
+npm install -g github:rmqg/codex-cx
+```
+
 4. 决定你要接入多少个账号，记为 `<N>`。创建账号目录并链接共享会话：
 
 ```sh
@@ -168,7 +174,7 @@ cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
 
 ## 自动切号
 
-运行期间，`cx` 会监控 Codex TUI 日志里的 usage-limit 错误。它会忽略工具调用文本或命令输出里只是“提到” usage-limit 字样的内容。一旦检测到真实额度限制，`cx` 会终止当前 Codex 进程，把该账号标记为本轮已耗尽，然后切到另一个可用账号。
+运行期间，`cx` 会监控 Codex TUI 日志里的 usage-limit 错误。它会识别旧的 `workspace_owner_credits_depleted`/`credits_depleted` 字段、新版 `Turn error: Your workspace is out of credits` 文案，以及结构化 Goal 模式 usage-limit 日志。它会忽略工具调用文本或命令输出里只是“提到”这些额度字样的内容。一旦检测到真实额度限制，`cx` 会终止当前 Codex 进程，把该账号标记为本轮已耗尽，然后切到另一个可用账号。
 
 重试路径取决于触发额度限制时的会话状态：
 

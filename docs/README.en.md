@@ -12,6 +12,12 @@
 npm install -g github:rmqg/codex-cx
 ```
 
+To update an existing global install, run the same command again:
+
+```sh
+npm install -g github:rmqg/codex-cx
+```
+
 4. Decide how many accounts you want to use; call that number `<N>`. Create account homes and shared session links:
 
 ```sh
@@ -168,7 +174,7 @@ Remaining accounts are sorted with this policy:
 
 ## Auto-Switching
 
-During a run, `cx` watches the Codex TUI log for usage-limit errors. It ignores tool-call text or command output that merely mentions usage-limit words. If a real usage limit is detected, `cx` terminates the current Codex process, marks that account exhausted for the current wrapper run, and switches to another usable account.
+During a run, `cx` watches the Codex TUI log for usage-limit errors. It recognizes older `workspace_owner_credits_depleted`/`credits_depleted` fields, newer `Turn error: Your workspace is out of credits` text, and structured Goal-mode usage-limit logs. It ignores tool-call text or command output that merely mentions those quota words. If a real usage limit is detected, `cx` terminates the current Codex process, marks that account exhausted for the current wrapper run, and switches to another usable account.
 
 The retry path depends on what happened before the limit:
 

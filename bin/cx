@@ -12,7 +12,14 @@ const packageVersion = readPackageVersion();
 const weeklySimilarDelta = 5;
 const primarySimilarDelta = 20;
 const rateLimitTextPattern =
-  /(?:usage limit|rate limit|limit reached|429|workspace_owner_credits_depleted|credits_depleted|You've hit your usage limit)/i;
+  /(?:usage limits?|rate limit|limit reached|429|workspace_owner_credits_depleted|credits_depleted|out of credits|You've hit your usage limit)/i;
+const rateLimitReasonPattern =
+  /(?:usage limits?|rate limit|limit reached|429|workspace_owner_credits_depleted|credits_depleted|out of credits|You've hit your usage limit)/i;
+const turnErrorRateLimitPattern = new RegExp(`\\bTurn error:.*${rateLimitReasonPattern.source}`, "i");
+const structuredGoalUsageLimitPattern =
+  /^(?:\d{4}-\d{2}-\d{2}T.*\b(?:INFO|WARN|ERROR)\b.*|(?:INFO|WARN|ERROR):?\s+.*)Goal hit usage limits\b/i;
+const rateLimitUiPattern =
+  /^■\s*(?:Your workspace is out of credits\. Add credits to continue\.|You've hit your usage limit\b)/i;
 const continuationPrompt =
   "Continue the interrupted task from the last user instruction in this session. " +
   "The previous account hit a usage limit before completing the turn; do not ask the user to repeat it.";
@@ -115,9 +122,9 @@ let terminating = false;
 
 function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.4";
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.5";
   } catch {
-    return "0.5.4";
+    return "0.5.5";
   }
 }
 
@@ -1040,17 +1047,23 @@ function isUsageLimitLogLine(line) {
   if (trimmed.includes("ToolCall:") || trimmed.includes("codex_core::stream_events_utils")) {
     return false;
   }
-  if (/^Turn error:.*(?:usage limit|rate limit|limit reached|429|workspace_owner_credits_depleted|credits_depleted)/i.test(trimmed)) {
+  if (rateLimitUiPattern.test(trimmed)) {
+    return true;
+  }
+  if (turnErrorRateLimitPattern.test(trimmed)) {
+    return true;
+  }
+  if (structuredGoalUsageLimitPattern.test(trimmed)) {
     return true;
   }
   if (
-    /^\d{4}-\d{2}-\d{2}T.*\b(?:ERROR|WARN)\b.*(?:Turn error:|You've hit your usage limit|workspace_owner_credits_depleted|credits_depleted|429)/i.test(
+    /^\d{4}-\d{2}-\d{2}T.*\b(?:ERROR|WARN)\b.*(?:Turn error:|You've hit your usage limit|workspace_owner_credits_depleted|credits_depleted|out of credits|429)/i.test(
       trimmed,
     )
   ) {
     return true;
   }
-  return /^(?:ERROR|WARN):?\b.*(?:Turn error:|You've hit your usage limit|workspace_owner_credits_depleted|credits_depleted|429)/i.test(
+  return /^(?:ERROR|WARN):?\b.*(?:Turn error:|You've hit your usage limit|workspace_owner_credits_depleted|credits_depleted|out of credits|429)/i.test(
     trimmed,
   );
 }
