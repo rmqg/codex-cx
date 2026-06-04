@@ -11,7 +11,8 @@ const packageVersion = readPackageVersion();
 
 const weeklySimilarDelta = 5;
 const primarySimilarDelta = 20;
-const rateLimitPattern = /Turn error:.*(?:usage limit|rate limit|limit reached|429)|You've hit your usage limit/i;
+const rateLimitTextPattern =
+  /(?:usage limit|rate limit|limit reached|429|workspace_owner_credits_depleted|credits_depleted|You've hit your usage limit)/i;
 const continuationPrompt =
   "Continue the interrupted task from the last user instruction in this session. " +
   "The previous account hit a usage limit before completing the turn; do not ask the user to repeat it.";
@@ -113,9 +114,9 @@ let terminating = false;
 
 function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.1";
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.2";
   } catch {
-    return "0.5.1";
+    return "0.5.2";
   }
 }
 
@@ -514,6 +515,21 @@ function reached(limit) {
   return limit.rateLimitReachedType || limit.rate_limit_reached_type || "";
 }
 
+function normalizeReachedReason(reason) {
+  const normalized = String(reason || "").toLowerCase();
+  if (
+    normalized === "primary" ||
+    normalized === "primary_limit_reached" ||
+    normalized === "workspace_owner_credits_depleted"
+  ) {
+    return "5h>=100%";
+  }
+  if (normalized === "secondary" || normalized === "secondary_limit_reached") {
+    return "weekly>=100%";
+  }
+  return reason;
+}
+
 function limitExhaustedReason(result) {
   if (!result?.ok) {
     return result?.error || "probe failed";
@@ -524,7 +540,7 @@ function limitExhaustedReason(result) {
 
   const reachedType = reached(result.limits);
   if (reachedType) {
-    return reachedType;
+    return normalizeReachedReason(reachedType);
   }
 
   const primary = rawUsedPercent(result.limits, "primary");
@@ -884,7 +900,7 @@ function resumeArgsFromAnalysis(analysis, prompt) {
     ];
   }
 
-  return [...analysis.globalArgs, "resume", "--last", ...(prompt ? [prompt] : [])];
+  return [...analysis.globalArgs, "resume", "--last"];
 }
 
 function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
@@ -947,6 +963,33 @@ function restoreTerminal() {
   }
 }
 
+function isUsageLimitLogLine(line) {
+  const trimmed = line.trim();
+  if (!rateLimitTextPattern.test(trimmed)) {
+    return false;
+  }
+  if (trimmed.includes("ToolCall:") || trimmed.includes("codex_core::stream_events_utils")) {
+    return false;
+  }
+  if (/^Turn error:.*(?:usage limit|rate limit|limit reached|429|workspace_owner_credits_depleted|credits_depleted)/i.test(trimmed)) {
+    return true;
+  }
+  if (
+    /^\d{4}-\d{2}-\d{2}T.*\b(?:ERROR|WARN)\b.*(?:Turn error:|You've hit your usage limit|workspace_owner_credits_depleted|credits_depleted|429)/i.test(
+      trimmed,
+    )
+  ) {
+    return true;
+  }
+  return /^(?:ERROR|WARN):?\b.*(?:Turn error:|You've hit your usage limit|workspace_owner_credits_depleted|credits_depleted|429)/i.test(
+    trimmed,
+  );
+}
+
+function logChunkHasUsageLimit(chunk) {
+  return chunk.split(/\r?\n/).some(isUsageLimitLogLine);
+}
+
 function runCodex(account, commandArgs) {
   return new Promise((resolve) => {
     const env = { ...process.env, CODEX_HOME: account.home };
@@ -971,6 +1014,7 @@ function runCodexMonitored(account, commandArgs, logDir) {
 
     const logFile = path.join(logDir, "codex-tui.log");
     let offset = 0;
+    let pendingLogLine = "";
     let rateLimited = false;
     let settled = false;
 
@@ -990,25 +1034,39 @@ function runCodexMonitored(account, commandArgs, logDir) {
         if (stat.size <= offset) {
           return;
         }
-        const length = stat.size - offset;
         const fd = fs.openSync(logFile, "r");
-        const buffer = Buffer.alloc(Math.min(length, 128 * 1024));
-        fs.readSync(fd, buffer, 0, buffer.length, offset);
-        fs.closeSync(fd);
-        offset = stat.size;
+        try {
+          while (offset < stat.size && !rateLimited) {
+            const length = stat.size - offset;
+            const buffer = Buffer.alloc(Math.min(length, 128 * 1024));
+            const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, offset);
+            if (bytesRead <= 0) {
+              break;
+            }
+            offset += bytesRead;
 
-        const chunk = buffer.toString("utf8");
-        if (rateLimitPattern.test(chunk)) {
-          rateLimited = true;
-          console.error("\n[cx-auto] usage limit detected; switching account...");
-          if (!child.killed) {
-            child.kill("SIGTERM");
-            setTimeout(() => {
-              if (!settled && !child.killed) {
-                child.kill("SIGKILL");
+            const chunk = pendingLogLine + buffer.subarray(0, bytesRead).toString("utf8");
+            const lines = chunk.split(/\r?\n/);
+            pendingLogLine = chunk.endsWith("\n") || chunk.endsWith("\r") ? "" : lines.pop() || "";
+            if (pendingLogLine.length > 8192) {
+              pendingLogLine = pendingLogLine.slice(-8192);
+            }
+
+            if (lines.some(isUsageLimitLogLine) || isUsageLimitLogLine(pendingLogLine)) {
+              rateLimited = true;
+              console.error("\n[cx-auto] usage limit detected; switching account...");
+              if (!child.killed) {
+                child.kill("SIGTERM");
+                setTimeout(() => {
+                  if (!settled && !child.killed) {
+                    child.kill("SIGKILL");
+                  }
+                }, 3000);
               }
-            }, 3000);
+            }
           }
+        } finally {
+          fs.closeSync(fd);
         }
       } catch {
         // The log file may not exist until Codex finishes initialization.
@@ -1135,8 +1193,11 @@ module.exports = {
   analyzeCodexArgs,
   compareAccountResults,
   isUsable,
+  isUsageLimitLogLine,
   latestSessionTurnState,
   limitExhaustedReason,
+  logChunkHasUsageLimit,
+  normalizeReachedReason,
   retryArgsAfterRateLimit,
   reached,
   selectResult,

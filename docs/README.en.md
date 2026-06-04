@@ -156,7 +156,7 @@ cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
 
 ## Selection Policy
 
-Automatic mode first skips exhausted or unavailable accounts. An account is unavailable when probing fails, no limit data is available, Codex reports a reached limit, 5h usage is at least 100%, or weekly usage is at least 100%.
+Automatic mode first skips exhausted or unavailable accounts. An account is unavailable when probing fails, no limit data is available, Codex reports a reached limit, 5h usage is at least 100%, or weekly usage is at least 100%. Reached primary limits, including `workspace_owner_credits_depleted`, are shown as `5h>=100%`; reached secondary limits are shown as `weekly>=100%`.
 
 Remaining accounts are sorted with this policy:
 
@@ -168,17 +168,18 @@ Remaining accounts are sorted with this policy:
 
 ## Auto-Switching
 
-During a run, `cx` watches the Codex TUI log for usage-limit errors. If a usage limit is detected, `cx` terminates the current Codex process, marks that account exhausted for the current wrapper run, and switches to another usable account.
+During a run, `cx` watches the Codex TUI log for usage-limit errors. It ignores tool-call text or command output that merely mentions usage-limit words. If a real usage limit is detected, `cx` terminates the current Codex process, marks that account exhausted for the current wrapper run, and switches to another usable account.
 
 The retry path depends on what happened before the limit:
 
 ```sh
 codex resume --last
-codex resume --last "Continue the interrupted task ..."
 codex exec resume --last "Continue the interrupted task ..."
 ```
 
-If the last turn in the current session completed, `cx` only resumes the session. If the last turn was interrupted after a new user instruction was recorded, `cx` resumes and sends a short continuation prompt so the new account keeps working on that pending instruction. For `cx exec ...`, retries use `codex exec resume --last` so non-interactive sessions keep their mode.
+If the last turn in the current session completed, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, `cx` still uses `codex resume --last`; the pending instruction remains in the shared session. Current Codex CLI versions treat an extra positional argument after interactive `resume --last` as a session ID, so `cx` does not append a continuation prompt there.
+
+For `cx exec ...`, retries use `codex exec resume --last "Continue ..."` so non-interactive sessions keep their mode and can explicitly continue the pending instruction.
 
 If the limited process did not create a current session file, `cx` retries the original command on the next account instead of blindly resuming an unrelated older session.
 

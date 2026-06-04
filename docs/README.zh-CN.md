@@ -156,7 +156,7 @@ cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
 
 ## 选择策略
 
-自动模式会先跳过耗尽或不可用账号。以下情况会被视为不可用：额度探测失败、没有 limit 数据、Codex 返回已触达限制、5h 用量大于等于 100%、weekly 用量大于等于 100%。
+自动模式会先跳过耗尽或不可用账号。以下情况会被视为不可用：额度探测失败、没有 limit 数据、Codex 返回已触达限制、5h 用量大于等于 100%、weekly 用量大于等于 100%。已触达的 primary 限制，包括 `workspace_owner_credits_depleted`，会统一显示为 `5h>=100%`；已触达的 secondary 限制会显示为 `weekly>=100%`。
 
 剩余账号按下面的规则排序：
 
@@ -168,17 +168,18 @@ cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
 
 ## 自动切号
 
-运行期间，`cx` 会监控 Codex TUI 日志里的 usage-limit 错误。一旦检测到额度限制，`cx` 会终止当前 Codex 进程，把该账号标记为本轮已耗尽，然后切到另一个可用账号。
+运行期间，`cx` 会监控 Codex TUI 日志里的 usage-limit 错误。它会忽略工具调用文本或命令输出里只是“提到” usage-limit 字样的内容。一旦检测到真实额度限制，`cx` 会终止当前 Codex 进程，把该账号标记为本轮已耗尽，然后切到另一个可用账号。
 
 重试路径取决于触发额度限制时的会话状态：
 
 ```sh
 codex resume --last
-codex resume --last "Continue the interrupted task ..."
 codex exec resume --last "Continue the interrupted task ..."
 ```
 
-如果上一轮已经完成，`cx` 只恢复会话。如果新指令已经写入 session，但这一轮还没完成，`cx` 会在恢复会话后附带一条短 continuation prompt，让新账号继续执行未完成的用户指令。对 `cx exec ...`，重试会走 `codex exec resume --last`，保持非交互模式。
+如果上一轮已经完成，`cx` 只恢复会话。如果交互式 `cx` 或 `cxr` 的新指令已经写入 session，但这一轮还没完成，`cx` 仍然只走 `codex resume --last`；未完成的指令会留在共享 session 里。当前 Codex CLI 会把交互式 `resume --last` 后面的额外位置参数当成 session ID，所以这里不会再追加 continuation prompt。
+
+对 `cx exec ...`，重试会走 `codex exec resume --last "Continue ..."`，保持非交互模式，并显式继续未完成的用户指令。
 
 如果受限进程还没来得及写出本轮 session 文件，`cx` 会在下一个账号上重跑原始命令，而不是盲目恢复某个更旧的 `--last` 会话。
 

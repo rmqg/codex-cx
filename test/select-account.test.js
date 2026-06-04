@@ -5,7 +5,14 @@ const fs = require("fs");
 const os = require("os");
 const { spawnSync } = require("child_process");
 const path = require("path");
-const { isUsable, limitExhaustedReason, retryArgsAfterRateLimit, selectResult } = require("../bin/cx");
+const {
+  isUsable,
+  isUsageLimitLogLine,
+  limitExhaustedReason,
+  logChunkHasUsageLimit,
+  retryArgsAfterRateLimit,
+  selectResult,
+} = require("../bin/cx");
 
 function account(name, primary, secondary, options = {}) {
   return {
@@ -131,8 +138,17 @@ function taskComplete() {
     account("account2", 70, 20),
   ]);
 
-  assert.equal(limitExhaustedReason(exhausted), "secondary");
+  assert.equal(limitExhaustedReason(exhausted), "weekly>=100%");
   assert.equal(selected.account.name, "account2", "exhausted accounts are skipped even when usage would sort first");
+}
+
+{
+  assert.equal(limitExhaustedReason(account("account1", 0, 0, { reached: "primary" })), "5h>=100%");
+  assert.equal(
+    limitExhaustedReason(account("account2", 100, 49, { reached: "workspace_owner_credits_depleted" })),
+    "5h>=100%",
+  );
+  assert.equal(limitExhaustedReason(account("account3", 99, 100, { reached: "secondary_limit_reached" })), "weekly>=100%");
 }
 
 {
@@ -155,6 +171,39 @@ function taskComplete() {
 
   assert.equal(isUsable(exhausted), false);
   assert.equal(selected.account.name, "account1", "usable active accounts beat an inactive exhausted account");
+}
+
+{
+  assert.equal(isUsageLimitLogLine("Turn error: You've hit your usage limit."), true);
+  assert.equal(
+    isUsageLimitLogLine(
+      "2026-06-04T01:00:00Z ERROR session_loop: Turn error: workspace_owner_credits_depleted",
+    ),
+    true,
+  );
+  assert.equal(isUsageLimitLogLine("ERROR: unexpected status 429 Too Many Requests"), true);
+  assert.equal(
+    isUsageLimitLogLine(
+      '2026-06-04T01:00:00Z INFO codex_core::stream_events_utils: ToolCall: exec_command {"cmd":"rg -n \\"usage limit|rate limit\\" /tmp"}',
+    ),
+    false,
+  );
+  assert.equal(
+    isUsageLimitLogLine(
+      "2026-06-04T01:00:00Z ERROR codex_tui: Error finding conversation path: Continue the interrupted task after a usage limit.",
+    ),
+    false,
+  );
+  assert.equal(isUsageLimitLogLine("+const rateLimitPattern = /usage limit/i;"), false);
+  assert.equal(
+    logChunkHasUsageLimit(
+      [
+        '2026-06-04T01:00:00Z INFO codex_core::stream_events_utils: ToolCall: exec_command {"cmd":"rg usage limit"}',
+        "2026-06-04T01:00:01Z ERROR session_loop: Turn error: usage limit reached",
+      ].join("\n"),
+    ),
+    true,
+  );
 }
 
 {
@@ -423,11 +472,27 @@ function taskComplete() {
     minMtimeMs: Date.now() - 1000,
   });
 
-  assert.deepEqual(retryArgs.slice(0, 4), ["-m", "gpt-5", "resume", "--last"]);
-  assert.match(
-    retryArgs.at(-1),
-    /Continue the interrupted task/,
-    "incomplete interactive turns preserve global options and continue the pending instruction",
+  assert.deepEqual(
+    retryArgs,
+    ["-m", "gpt-5", "resume", "--last"],
+    "incomplete interactive turns preserve global options and resume without passing the prompt as a session ID",
+  );
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [taskStarted(), userMessage("resume work")]);
+
+  const retryArgs = retryArgsAfterRateLimit(["resume", "--last"], accountHome, {
+    minMtimeMs: Date.now() - 1000,
+  });
+
+  assert.deepEqual(
+    retryArgs,
+    ["resume", "--last"],
+    "interactive resume retries must not append a continuation prompt after --last",
   );
 
   fs.rmSync(accountHome, { recursive: true, force: true });
