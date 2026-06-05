@@ -1217,7 +1217,6 @@ function latestSessionTurnState(accountHome, options = {}) {
   const completedByUsageLimit =
     state.completed &&
     state.sawUser &&
-    !state.sawAssistant &&
     !state.lastAgentMessage &&
     (state.usageLimited || options.assumeUsageLimited);
 

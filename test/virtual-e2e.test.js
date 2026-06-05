@@ -69,6 +69,20 @@ function writeUsageLimitedCompleteSession() {
     JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-e2e', last_agent_message: null } })
   ].join('\\n') + '\\n');
 }
+function writeQueuedFollowupUsageLimitedSession() {
+  const dir = path.join(home, 'sessions', '2026', '06', '04');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'rollout-e2e.jsonl'), [
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'session_meta', payload: { id: '019eaaaa-bbbb-7ccc-8ddd-000000000003', cwd: process.cwd() } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-e2e' } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'make screen capture work' }] } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'I am updating the scene.' }] } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'function_call', name: 'exec_command', call_id: 'call-e2e', arguments: '{}' } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'can I choose the screen capture source' }] } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'token_count', rate_limits: { credits: { has_credits: false }, rate_limit_reached_type: null } } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-e2e', last_agent_message: null } })
+  ].join('\\n') + '\\n');
+}
 function writeLog(line) {
   const dir = logDir();
   if (!dir) return;
@@ -146,6 +160,8 @@ if (args[0] === 'app-server') {
   if (account === process.env.FAKE_LIMIT_ACCOUNT) {
     if (process.env.FAKE_LIMIT_SESSION === 'usage-complete') {
       writeUsageLimitedCompleteSession();
+    } else if (process.env.FAKE_LIMIT_SESSION === 'queued-follow-up') {
+      writeQueuedFollowupUsageLimitedSession();
     } else {
       writeIncompleteSession();
     }
@@ -386,6 +402,22 @@ function runVirtualE2e() {
   assert.ok(runs[1].args.includes("resume"));
   assert.ok(runs[1].args.includes("019eaaaa-bbbb-7ccc-8ddd-000000000002"));
   assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
+
+  clearRecords();
+  ok("cxa", ["resume", "--last"], {
+    FAKE_LIMIT_ACCOUNT: ".codex-account1",
+    FAKE_LIMIT_LOG: "out-of-credits",
+    FAKE_LIMIT_SESSION: "queued-follow-up",
+  });
+  runs = readRecords().filter((entry) => entry.type === "run");
+  assert.equal(runs.length, 2, JSON.stringify(runs));
+  assert.equal(path.basename(runs[1].home), ".codex-account3");
+  assert.ok(runs[1].args.includes("resume"));
+  assert.ok(runs[1].args.includes("019eaaaa-bbbb-7ccc-8ddd-000000000003"));
+  assert.ok(
+    runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)),
+    "queued follow-up usage-limit retries must explicitly send the continuation prompt",
+  );
 
   const unsharedOne = path.join(root, "unshared-account1");
   const unsharedTwo = path.join(root, "unshared-account2");

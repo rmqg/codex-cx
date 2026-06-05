@@ -101,6 +101,13 @@ function assistantMessage(text) {
   };
 }
 
+function toolCall() {
+  return {
+    type: "response_item",
+    payload: { type: "function_call", name: "exec_command", call_id: "call-1", arguments: "{}" },
+  };
+}
+
 function taskComplete(lastAgentMessage = null) {
   return { type: "event_msg", payload: { type: "task_complete", turn_id: "turn-1", last_agent_message: lastAgentMessage } };
 }
@@ -568,7 +575,7 @@ function tokenCountWithoutCredits() {
 
 {
   const accountHome = tempAccountHome();
-  writeSession(accountHome, [taskStarted(), userMessage("implement feature"), assistantMessage("done"), taskComplete()]);
+  writeSession(accountHome, [taskStarted(), userMessage("implement feature"), assistantMessage("done"), taskComplete("done")]);
 
   assert.deepEqual(
     retryArgsAfterRateLimit(["exec", "implement feature"], accountHome, { minMtimeMs: Date.now() - 1000 }),
@@ -591,6 +598,32 @@ function tokenCountWithoutCredits() {
     retryArgs,
     ["resume", "--last", retryArgs.at(-1)],
     "usage-limited interactive turns with task_complete but no assistant output continue through TUI resume",
+  );
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [
+    taskStarted(),
+    userMessage("make screen capture work"),
+    assistantMessage("I am updating the OBS scene."),
+    toolCall(),
+    userMessage("can I choose the screen capture source"),
+    tokenCountWithoutCredits(),
+    taskComplete(null),
+  ]);
+
+  const retryArgs = retryArgsAfterRateLimit(["resume", "--last"], accountHome, {
+    minMtimeMs: Date.now() - 1000,
+  });
+
+  assert.deepEqual(
+    retryArgs,
+    ["resume", "--last", retryArgs.at(-1)],
+    "usage-limited turns with a queued follow-up after earlier assistant output still receive a continuation prompt",
   );
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 

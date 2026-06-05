@@ -188,7 +188,7 @@ codex resume <interrupted-session-id> "Continue the interrupted task ..."
 codex exec resume <interrupted-session-id> "Continue the interrupted task ..."
 ```
 
-如果上一轮已经正常完成并产生了 assistant 输出，`cx` 只恢复会话。如果交互式 `cx` 或 `cxr` 的新指令已经写入 session，但这一轮还没完成，或者 Codex 因额度耗尽写出了 `task_complete` 但 `last_agent_message` 为空，`cx` 会通过 `codex resume <interrupted-session-id> "Continue ..."` 让下一个账号打开 TUI，并自动提交继续执行这条未完成指令的 prompt。只要 session 文件里有 id，`cx` 会恢复刚刚中断的精确 session，而不是依赖下一个账号自己的 `--last`。
+如果上一轮已经正常完成并产生了 assistant 输出，`cx` 只恢复会话。如果交互式 `cx` 或 `cxr` 的新指令已经写入 session，但这一轮还没完成，或者 Codex 因额度耗尽写出了 `task_complete` 但 `last_agent_message` 为空，`cx` 会通过 `codex resume <interrupted-session-id> "Continue ..."` 让下一个账号打开 TUI，并自动提交继续执行这条未完成指令的 prompt。即使同一个 turn 里较早已经有过 assistant 输出，只要额度耗尽时没有最终 `last_agent_message`，也会按未完成处理。只要 session 文件里有 id，`cx` 会恢复刚刚中断的精确 session，而不是依赖下一个账号自己的 `--last`。
 
 对 `cx exec ...`，重试会走 `codex exec resume <interrupted-session-id> "Continue ..."`，保持非交互模式，并显式继续未完成的用户指令。如果原始命令是 `cx exec resume <session-id>`，重试会保留这个显式 session id，而不是改成 `--last`。
 
