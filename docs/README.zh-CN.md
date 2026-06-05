@@ -24,6 +24,12 @@ npm install -g github:rmqg/codex-cx
 cx-setup --accounts <N> --migrate
 ```
 
+创建 OpenAI API key 或 OpenAI 兼容接口账号：
+
+```sh
+printf '%s' "$OPENAI_API_KEY" | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --migrate
+```
+
 如果你希望日志、state、goals、memories sqlite、生成图片等状态也共享，使用 full 模式：
 
 ```sh
@@ -60,6 +66,9 @@ cx --no-trust [codex args...]
 cxa [codex args...]
 cxr [extra resume args...]
 cx-setup [options]
+cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --migrate
+cx-setup --remove free
+cx-setup --accounts 2 --prune --migrate
 ```
 
 `cxa` 等价于：
@@ -119,6 +128,63 @@ cx-setup --homes work=~/.codex-work,school=~/.codex-school --migrate
 
 账号名和账号 home 路径都必须唯一。账号 home 不能和 shared home 指向同一个目录。
 
+## API key 账号
+
+`cx-setup --add-api-key <name>` 会创建一个命名 API key 账号。默认账号目录是 `~/.codex-account-<name>`，例如 `free` 会变成 `~/.codex-account-free`，自动发现时也会显示为 `free`。
+
+推荐从环境变量或 stdin 写入 key，避免把 key 留在 shell 历史里：
+
+```sh
+OPENAI_API_KEY=sk-... cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://ai2.hhhh.cc/v1 --model gpt-5.5 --migrate
+
+printf '%s' 'sk-...' | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://ai2.hhhh.cc/v1 --model gpt-5.5 --migrate
+```
+
+这个命令会在该账号 home 写入 `auth.json`：
+
+```json
+{
+  "auth_mode": "apikey",
+  "OPENAI_API_KEY": "sk-..."
+}
+```
+
+同时会在该账号的 `config.toml` 写入 `cli_auth_credentials_store = "file"`、`forced_login_method = "api"`，并按参数写入 `model` 和 `openai_base_url`。如果 `auth.json` 已存在，默认会拒绝覆盖；确认要替换时加 `--force`。
+
+API key 账号不会走 ChatGPT 账号额度探测。自动模式会把它视为可用账号，但选择顺序由 API key 模式控制：
+
+```sh
+CX_API_KEY_MODE=fallback cxa
+CX_API_KEY_MODE=prefer cxa
+cx-setup --api-key-mode prefer
+```
+
+`fallback` 是默认模式：优先使用正常 ChatGPT/Codex 账号，只有这些账号不可用、探测失败或额度耗尽时才使用 API key 账号。`prefer` 会优先选择 API key 账号。`cx-setup --api-key-mode <mode>` 会写入本机 `~/.config/codex-cx/config.json`，环境变量 `CX_API_KEY_MODE` 可以临时覆盖它。
+
+## 增减账号
+
+增加编号账号仍使用：
+
+```sh
+cx-setup --accounts <N> --migrate
+```
+
+减少账号时，如果只是把 `<N>` 改小，旧的 `.codex-account*` 目录仍会被自动发现。使用 `--prune` 可以把目标集合之外的已发现账号目录移到 `.cx-backup-*` 备份名，从自动发现里移除：
+
+```sh
+cx-setup --accounts 2 --prune --migrate
+```
+
+移除单个命名或编号账号：
+
+```sh
+cx-setup --remove free
+cx-setup --remove account3
+cx-setup --remove 3
+```
+
+移除账号默认是移动整个账号 home 到备份路径，不会删除或共享其中的 `auth.json`。如果目标账号正被 Codex 进程使用，真实执行会拒绝操作；先退出对应会话，或明确接受风险时使用 `--allow-active`。
+
 ## 共享工作空间
 
 `cx-setup` 会创建账号目录，并把共享工作状态链接到同一个 shared home。它永远不会链接 `auth.json`，每个账号都保留自己的登录凭据。
@@ -155,6 +221,9 @@ cx-setup --accounts <N> --migrate
 cx-setup --accounts <N> --full --migrate
 cx-setup --accounts <N> --home ~/.codex-shared --prefix ~/.codex-account --full --migrate
 cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
+cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --migrate
+cx-setup --accounts 2 --prune --migrate
+cx-setup --remove free
 ```
 
 `--migrate` 会在共享目标不存在时复制已有账号数据，然后把旧路径备份成 `.cx-backup-*`，再创建软链接。SQLite 文件不能真正合并；已有的每个账号文件会保留在备份里。
@@ -210,6 +279,7 @@ codex exec resume <interrupted-session-id> "Continue the interrupted task ..."
 CX_ACCOUNT=1|account1|work
 CX_ACCOUNT_COUNT=N
 CX_ACCOUNT_HOMES=name=/path,name2=/path2
+CX_API_KEY_MODE=prefer|fallback
 CX_NO_BYPASS=1
 CX_NO_TRUST=1
 CX_AUTO_RESUME_GOAL=0
@@ -222,6 +292,8 @@ CX_INTERACTIVE_AUTO_EXEC=1
 `CX_ACCOUNT` 等价于 `--account`：它会禁用探测、排序和自动切号，只使用指定账号。
 
 `CX_ACCOUNT_COUNT`、`CX_LIMIT_TIMEOUT_MS`、`CX_LIMIT_RETRIES`、`CX_AUTO_MAX_SWITCHES` 必须是正整数。
+
+`CX_API_KEY_MODE=fallback` 是默认选择策略：可用的 ChatGPT/Codex 账号优先，API key 账号作为额度耗尽后的兜底。`CX_API_KEY_MODE=prefer` 会优先选择 API key 账号。本机默认值也可以用 `cx-setup --api-key-mode prefer` 写入 `~/.config/codex-cx/config.json`。
 
 `CX_LIMIT_TIMEOUT_MS` 作用于每一次 app-server 额度探测。`CX_LIMIT_RETRIES` 控制每个账号最多探测几次；缺少 `auth.json` 仍然会立即报错，不会重试。
 
@@ -247,6 +319,8 @@ CX_INTERACTIVE_AUTO_EXEC=1
 - setup 拒绝 active 目录：先退出正在运行的 Codex 会话，再重新运行 `cx-setup`。
 - setup 报重复账号名或重复 home：检查 `--homes` 或 `CX_ACCOUNT_HOMES`，确保每个账号名和每个 `CODEX_HOME` 都唯一。
 - setup 报 `Account home must not be the shared home`：账号目录和共享目录要分开，例如 `~/.codex` 做共享状态，`~/.codex-account1` 做第一个账号。
+- 改小 `--accounts <N>` 后旧账号仍会出现：旧目录还在自动发现范围内，运行 `cx-setup --accounts <N> --prune --migrate` 或 `cx-setup --remove <selector>`。
+- API key 账号没有被优先使用：默认是 `fallback`，运行 `CX_API_KEY_MODE=prefer cxa` 临时切换，或 `cx-setup --api-key-mode prefer` 写入本机默认。
 
 ## 许可证
 

@@ -7,6 +7,7 @@ const { spawnSync } = require("child_process");
 const path = require("path");
 const {
   extractAccountEmail,
+  isApiKeyAuth,
   isUsable,
   isUsageLimitLogLine,
   isResumeInvocation,
@@ -28,6 +29,7 @@ function account(name, primary, secondary, options = {}) {
       secondary: { usedPercent: secondary },
       rateLimitReachedType: options.reached || "",
     },
+    authMode: options.authMode || "account",
   };
 }
 
@@ -132,6 +134,8 @@ function tokenCountWithoutCredits() {
     "token@example.com",
   );
   assert.equal(extractAccountEmail({ tokens: { id_token: "not-a-token" } }), "");
+  assert.equal(isApiKeyAuth({ auth_mode: "apikey", OPENAI_API_KEY: "sk-test" }), true);
+  assert.equal(isApiKeyAuth({ auth_mode: "chatgpt" }), false);
 }
 
 {
@@ -221,6 +225,42 @@ function tokenCountWithoutCredits() {
 
   assert.equal(isUsable(exhausted), false);
   assert.equal(selected.account.name, "account1", "usable active accounts beat an inactive exhausted account");
+}
+
+{
+  const selected = selectResult(
+    [
+      account("account1", 90, 90),
+      account("free", 0, 0, { authMode: "apikey" }),
+    ],
+    { apiKeyMode: "fallback" },
+  );
+
+  assert.equal(selected.account.name, "account1", "fallback mode prefers a usable account before API-key accounts");
+}
+
+{
+  const selected = selectResult(
+    [
+      account("account1", 90, 90),
+      account("free", 0, 0, { authMode: "apikey" }),
+    ],
+    { apiKeyMode: "prefer" },
+  );
+
+  assert.equal(selected.account.name, "free", "prefer mode selects API-key accounts before usable accounts");
+}
+
+{
+  const selected = selectResult(
+    [
+      account("account1", 100, 90),
+      account("free", 0, 0, { authMode: "apikey" }),
+    ],
+    { apiKeyMode: "fallback" },
+  );
+
+  assert.equal(selected.account.name, "free", "fallback mode uses API-key accounts after regular accounts are exhausted");
 }
 
 {

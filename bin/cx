@@ -24,6 +24,7 @@ const rateLimitUiPattern =
 const nonAccountRateLimitPattern =
   /(?:codex_core_plugins::startup_sync|GitHub HTTP sync failed|curated plugin sync|api\.github\.com\/repos\/openai\/plugins|github\.com\/openai\/plugins(?:\.git)?|docs\.github\.com\/en\/site-policy\/github-terms|You have exceeded a secondary rate limit)/i;
 const logLevelLinePattern = /^(?:\d{4}-\d{2}-\d{2}T.*\b(?:INFO|WARN|ERROR)\b.*|(?:INFO|WARN|ERROR):?\b.*)/i;
+const apiKeyModes = new Set(["prefer", "fallback"]);
 const continuationPrompt =
   "Continue the interrupted task from the last user instruction in this session. " +
   "The previous account hit a usage limit before completing the turn; do not ask the user to repeat it.";
@@ -150,6 +151,7 @@ Environment:
   CX_NO_BYPASS=1                                Do not add the bypass flag.
   CX_NO_TRUST=1                                 Do not inject project trust for the current workdir.
   CX_AUTO_RESUME_GOAL=0                         Do not reactivate paused/limited goals before resume.
+  CX_API_KEY_MODE=prefer|fallback               API-key account selection mode. Default: fallback.
   CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
   CX_LIMIT_RETRIES=2                            Rate-limit probe attempts per account.
   CX_AUTO_MAX_SWITCHES=5                        Max automatic account switches per run.
@@ -237,13 +239,44 @@ function parsePositiveInteger(value, fallback, label) {
 
 function getRuntimeConfig() {
   if (!runtimeConfigCache) {
+    const localConfig = readLocalConfig();
     runtimeConfigCache = {
       timeoutMs: parsePositiveInteger(process.env.CX_LIMIT_TIMEOUT_MS, 15000, "CX_LIMIT_TIMEOUT_MS"),
       limitRetries: parsePositiveInteger(process.env.CX_LIMIT_RETRIES, 2, "CX_LIMIT_RETRIES"),
       autoMaxSwitches: parsePositiveInteger(process.env.CX_AUTO_MAX_SWITCHES, 5, "CX_AUTO_MAX_SWITCHES"),
+      apiKeyMode: normalizeApiKeyMode(process.env.CX_API_KEY_MODE || localConfig.apiKeyMode || "fallback", "CX_API_KEY_MODE"),
     };
   }
   return runtimeConfigCache;
+}
+
+function localConfigPath() {
+  const base = process.env.XDG_CONFIG_HOME ? expandHomePath(process.env.XDG_CONFIG_HOME) : path.join(home, ".config");
+  return path.join(base, "codex-cx", "config.json");
+}
+
+function readLocalConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(localConfigPath(), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function normalizeApiKeyMode(value, label = "api key mode") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/_/g, "-");
+  if (["prefer", "first", "api-key-first", "apikey-first", "apikey", "api-key"].includes(normalized)) {
+    return "prefer";
+  }
+  if (["fallback", "account-first", "after-limit", "limit-fallback", "limit-exhausted"].includes(normalized)) {
+    return "fallback";
+  }
+  if (!apiKeyModes.has(normalized)) {
+    const error = new Error(`${label} must be prefer or fallback`);
+    error.exitCode = 2;
+    throw error;
+  }
+  return normalized;
 }
 
 function sleep(ms) {
@@ -473,15 +506,28 @@ function extractAccountEmail(auth) {
   return findEmailValue(auth) || findJwtEmail(auth);
 }
 
-function readAccountEmail(account) {
+function isApiKeyAuth(auth) {
+  return Boolean(auth && (auth.auth_mode === "apikey" || auth.OPENAI_API_KEY));
+}
+
+function readAccountAuth(account) {
   try {
-    return extractAccountEmail(JSON.parse(fs.readFileSync(path.join(account.home, "auth.json"), "utf8")));
+    return JSON.parse(fs.readFileSync(path.join(account.home, "auth.json"), "utf8"));
   } catch {
-    return "";
+    return null;
   }
 }
 
+function readAccountEmail(account) {
+  const auth = readAccountAuth(account);
+  return auth ? extractAccountEmail(auth) : "";
+}
+
 function accountDisplayName(account) {
+  const auth = readAccountAuth(account);
+  if (isApiKeyAuth(auth)) {
+    return `${account.name} (api-key)`;
+  }
   const email = readAccountEmail(account);
   return email ? `${account.name} (${email})` : account.name;
 }
@@ -515,12 +561,33 @@ async function readRateLimits(account, options = {}) {
     return Promise.resolve({ account, ok: false, error: `missing ${authPath}` });
   }
 
+  const auth = readAccountAuth(account);
+  if (!auth) {
+    return Promise.resolve({ account, ok: false, authMode: "unknown", error: `invalid ${authPath}` });
+  }
+  if (isApiKeyAuth(auth)) {
+    if (!auth.OPENAI_API_KEY) {
+      return Promise.resolve({ account, ok: false, authMode: "apikey", error: `missing OPENAI_API_KEY in ${authPath}` });
+    }
+    return Promise.resolve({
+      account,
+      ok: true,
+      authMode: "apikey",
+      syntheticLimits: true,
+      limits: {
+        primary: { usedPercent: 0 },
+        secondary: { usedPercent: 0 },
+        rateLimitReachedType: "",
+      },
+    });
+  }
+
   const limitRetries = options.limitRetries || getRuntimeConfig().limitRetries;
   let lastError = null;
   for (let attempt = 1; attempt <= limitRetries; attempt += 1) {
     try {
       const result = await appServerRequest(account.home, "account/rateLimits/read", null);
-      return { account, ok: true, limits: extractCodexLimit(result) };
+      return { account, ok: true, authMode: "account", limits: extractCodexLimit(result) };
     } catch (error) {
       lastError = error;
       if (attempt < limitRetries) {
@@ -529,7 +596,7 @@ async function readRateLimits(account, options = {}) {
     }
   }
 
-  return { account, ok: false, error: lastError?.message || "rate-limit read failed" };
+  return { account, ok: false, authMode: "account", error: lastError?.message || "rate-limit read failed" };
 }
 
 function appServerRequest(accountHome, method, params, options = {}) {
@@ -714,6 +781,10 @@ function isUsable(result) {
   return Boolean(result?.ok && result.limits && !limitExhaustedReason(result));
 }
 
+function isApiKeyResult(result) {
+  return result?.authMode === "apikey";
+}
+
 function getProcessActiveAccountNames() {
   const names = new Set();
   const accounts = getDefaultAccounts();
@@ -754,11 +825,19 @@ function getActiveAccountNames() {
   return getProcessActiveAccountNames();
 }
 
-function compareAccountResults(a, b) {
+function compareAccountResults(a, b, options = {}) {
+  const apiKeyMode = options.apiKeyMode || getRuntimeConfig().apiKeyMode;
   const aUsable = isUsable(a);
   const bUsable = isUsable(b);
   if (aUsable !== bUsable) {
     return aUsable ? -1 : 1;
+  }
+
+  if (aUsable && bUsable && isApiKeyResult(a) !== isApiKeyResult(b)) {
+    if (apiKeyMode === "prefer") {
+      return isApiKeyResult(a) ? -1 : 1;
+    }
+    return isApiKeyResult(a) ? 1 : -1;
   }
 
   const aSecondary = usedPercent(a.limits, "secondary");
@@ -795,19 +874,21 @@ function formatPercent(value) {
 }
 
 function printStatus(results) {
+  const { apiKeyMode } = getRuntimeConfig();
   console.error(
     `Selection rule: weekly delta > ${weeklySimilarDelta}% wins; within ${weeklySimilarDelta}% use 5h; ` +
-      `5h delta <= ${primarySimilarDelta}% prefers inactive accounts; exhausted accounts are skipped.`,
+      `5h delta <= ${primarySimilarDelta}% prefers inactive accounts; API-key mode is ${apiKeyMode}; exhausted accounts are skipped.`,
   );
-  console.error("Account   active   5h used   weekly used   reached   home");
-  for (const result of results.slice().sort(compareAccountResults)) {
+  console.error("Account   active   auth      5h used   weekly used   reached   home");
+  for (const result of results.slice().sort((a, b) => compareAccountResults(a, b, { apiKeyMode }))) {
     const limit = result.limits;
     const active = result.active ? "yes" : "-";
+    const auth = result.authMode === "apikey" ? "api-key" : result.authMode === "account" ? "account" : "-";
     const primary = result.ok ? formatPercent(usedPercent(limit, "primary")) : "ERR";
     const secondary = result.ok ? formatPercent(usedPercent(limit, "secondary")) : "ERR";
     const hit = limitExhaustedReason(result) || "-";
     console.error(
-      `${result.account.name.padEnd(9)} ${active.padEnd(8)} ${primary.padEnd(9)} ${secondary.padEnd(13)} ${String(hit).padEnd(9)} ${result.account.home}`,
+      `${result.account.name.padEnd(9)} ${active.padEnd(8)} ${auth.padEnd(9)} ${primary.padEnd(9)} ${secondary.padEnd(13)} ${String(hit).padEnd(9)} ${result.account.home}`,
     );
   }
 }
@@ -885,8 +966,9 @@ function baseGlobalArgs(options, codexArgs, extraGlobalArgs = []) {
   return [...globalArgs, ...extraGlobalArgs];
 }
 
-function selectResult(results) {
-  return results.slice().sort(compareAccountResults).find(isUsable) || null;
+function selectResult(results, options = {}) {
+  const apiKeyMode = options.apiKeyMode || getRuntimeConfig().apiKeyMode;
+  return results.slice().sort((a, b) => compareAccountResults(a, b, { apiKeyMode })).find(isUsable) || null;
 }
 
 function optionName(arg) {
@@ -1448,8 +1530,9 @@ async function probeAccounts(excludedNames = new Set(), options = {}) {
 
 function describeSelection(result, prefix = "cx-auto") {
   const limit = result.limits;
+  const auth = result.authMode === "apikey" ? "api-key" : "account";
   console.error(
-    `[${prefix}] selected ${accountDisplayName(result.account)}: 5h used ${formatPercent(usedPercent(limit, "primary"))}, ` +
+    `[${prefix}] selected ${accountDisplayName(result.account)} [${auth}]: 5h used ${formatPercent(usedPercent(limit, "primary"))}, ` +
       `weekly used ${formatPercent(usedPercent(limit, "secondary"))}`,
   );
 }
@@ -1717,6 +1800,8 @@ module.exports = {
   extractAccountEmail,
   analyzeCodexArgs,
   compareAccountResults,
+  isApiKeyAuth,
+  isApiKeyResult,
   isUsable,
   isUsageLimitLogLine,
   isResumeInvocation,
@@ -1725,6 +1810,7 @@ module.exports = {
   logChunkHasUsageLimit,
   readSessionMeta,
   normalizeReachedReason,
+  normalizeApiKeyMode,
   retryPlanAfterRateLimit,
   resolveResumeThreadId,
   retryArgsAfterRateLimit,

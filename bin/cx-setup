@@ -33,6 +33,7 @@ const fullSharedItems = [
   "state_5.sqlite-shm",
   "state_5.sqlite-wal",
 ];
+const apiKeyModes = new Set(["prefer", "fallback"]);
 
 function usage() {
   console.log(`Usage:
@@ -41,6 +42,16 @@ function usage() {
 Options:
   --accounts N          Create/link ~/.codex-account1..N.
   --homes LIST          Explicit account homes, comma-separated. Entries can be name=path or path.
+  --add-api-key NAME    Create/update one API-key account. Default home: ~/.codex-account-NAME.
+  --account-home DIR    Account home to use with --add-api-key.
+  --api-key KEY         API key to write for --add-api-key.
+  --api-key-env ENV     Read the API key for --add-api-key from ENV.
+  --api-key-stdin       Read the API key for --add-api-key from stdin.
+  --openai-base-url URL Write openai_base_url for the API-key account.
+  --model MODEL         Write the default model for the API-key account.
+  --remove SELECTOR     Move a discovered/configured account home to a backup.
+  --prune               With --accounts/--homes, move extra discovered homes to backups.
+  --api-key-mode MODE   Persist local auto-selection mode: prefer or fallback.
   --home DIR            Shared Codex home. Default: ~/.codex.
   --prefix NAME         Account directory prefix. Default: ~/.codex-account.
   --full                Also share Codex state/log sqlite files.
@@ -50,7 +61,10 @@ Options:
   --dry-run             Print actions without changing files.
 
 This never links auth.json. Log in once per account with:
-  CODEX_HOME=~/.codex-accountN codex login`);
+  CODEX_HOME=~/.codex-accountN codex login
+
+API-key example:
+  printf '%s' "$OPENAI_API_KEY" | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --migrate`);
 }
 
 function parseArgs(argv) {
@@ -64,6 +78,16 @@ function parseArgs(argv) {
     force: false,
     allowActive: false,
     dryRun: false,
+    addApiKey: null,
+    accountHome: null,
+    apiKey: null,
+    apiKeyEnv: null,
+    apiKeyStdin: false,
+    openaiBaseUrl: null,
+    model: null,
+    remove: [],
+    prune: false,
+    apiKeyMode: null,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -92,6 +116,14 @@ function parseArgs(argv) {
       options.dryRun = true;
       continue;
     }
+    if (arg === "--api-key-stdin") {
+      options.apiKeyStdin = true;
+      continue;
+    }
+    if (arg === "--prune") {
+      options.prune = true;
+      continue;
+    }
     if (arg === "--accounts") {
       options.accounts = parsePositiveInteger(requiredValue(argv, ++i, arg), arg);
       continue;
@@ -106,6 +138,74 @@ function parseArgs(argv) {
     }
     if (arg.startsWith("--homes=")) {
       options.homes = parseHomes(arg.slice("--homes=".length));
+      continue;
+    }
+    if (arg === "--add-api-key") {
+      options.addApiKey = parseAccountName(requiredValue(argv, ++i, arg), arg);
+      continue;
+    }
+    if (arg.startsWith("--add-api-key=")) {
+      options.addApiKey = parseAccountName(arg.slice("--add-api-key=".length), "--add-api-key");
+      continue;
+    }
+    if (arg === "--account-home") {
+      options.accountHome = expandHomePath(requiredValue(argv, ++i, arg));
+      continue;
+    }
+    if (arg.startsWith("--account-home=")) {
+      options.accountHome = expandHomePath(arg.slice("--account-home=".length));
+      continue;
+    }
+    if (arg === "--api-key") {
+      options.apiKey = requiredValue(argv, ++i, arg);
+      continue;
+    }
+    if (arg.startsWith("--api-key=")) {
+      options.apiKey = arg.slice("--api-key=".length);
+      continue;
+    }
+    if (arg === "--api-key-env") {
+      options.apiKeyEnv = requiredValue(argv, ++i, arg);
+      continue;
+    }
+    if (arg.startsWith("--api-key-env=")) {
+      options.apiKeyEnv = arg.slice("--api-key-env=".length);
+      continue;
+    }
+    if (arg === "--openai-base-url" || arg === "--base-url") {
+      options.openaiBaseUrl = requiredValue(argv, ++i, arg);
+      continue;
+    }
+    if (arg.startsWith("--openai-base-url=")) {
+      options.openaiBaseUrl = arg.slice("--openai-base-url=".length);
+      continue;
+    }
+    if (arg.startsWith("--base-url=")) {
+      options.openaiBaseUrl = arg.slice("--base-url=".length);
+      continue;
+    }
+    if (arg === "--model") {
+      options.model = requiredValue(argv, ++i, arg);
+      continue;
+    }
+    if (arg.startsWith("--model=")) {
+      options.model = arg.slice("--model=".length);
+      continue;
+    }
+    if (arg === "--remove") {
+      options.remove.push(requiredValue(argv, ++i, arg));
+      continue;
+    }
+    if (arg.startsWith("--remove=")) {
+      options.remove.push(arg.slice("--remove=".length));
+      continue;
+    }
+    if (arg === "--api-key-mode") {
+      options.apiKeyMode = normalizeApiKeyMode(requiredValue(argv, ++i, arg), arg);
+      continue;
+    }
+    if (arg.startsWith("--api-key-mode=")) {
+      options.apiKeyMode = normalizeApiKeyMode(arg.slice("--api-key-mode=".length), "--api-key-mode");
       continue;
     }
     if (arg === "--home") {
@@ -146,6 +246,20 @@ function parsePositiveInteger(value, label) {
   return parsed;
 }
 
+function parseAccountName(value, label) {
+  const name = String(value || "").trim();
+  if (!name) {
+    throw new Error(`${label} requires a non-empty account name`);
+  }
+  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
+    throw new Error(`${label} account name can only contain letters, numbers, dots, underscores, and hyphens`);
+  }
+  if (name === "." || name === "..") {
+    throw new Error(`${label} account name must not be ${name}`);
+  }
+  return name;
+}
+
 function expandHomePath(value) {
   if (value === "~") {
     return home;
@@ -154,6 +268,10 @@ function expandHomePath(value) {
     return path.join(home, value.slice(2));
   }
   return path.resolve(value);
+}
+
+function defaultApiKeyAccountHome(name) {
+  return path.join(home, `.codex-account-${name}`);
 }
 
 function naturalAccountSort(a, b) {
@@ -237,16 +355,34 @@ function parseHomes(value) {
 }
 
 function accountHomes(options) {
+  if (options.addApiKey && !options.homes && options.accounts === null) {
+    return [{ name: options.addApiKey, home: options.accountHome || defaultApiKeyAccountHome(options.addApiKey) }];
+  }
   if (options.homes) {
-    return options.homes;
+    return appendApiKeyHome(options, options.homes);
   }
   if (options.accounts === null) {
-    return discoverAccountHomes();
+    return appendApiKeyHome(options, discoverAccountHomes());
   }
-  return Array.from({ length: options.accounts }, (_, index) => ({
+  return appendApiKeyHome(options, Array.from({ length: options.accounts }, (_, index) => ({
     name: `account${index + 1}`,
     home: `${options.prefix}${index + 1}`,
-  }));
+  })));
+}
+
+function appendApiKeyHome(options, accounts) {
+  if (!options.addApiKey) {
+    return accounts;
+  }
+
+  const accountHome = options.accountHome || defaultApiKeyAccountHome(options.addApiKey);
+  const existing = accounts.find((account) => account.name.toLowerCase() === options.addApiKey.toLowerCase());
+  if (existing) {
+    return accounts.map((account) =>
+      account === existing ? { ...account, home: options.accountHome ? accountHome : account.home } : account,
+    );
+  }
+  return [...accounts, { name: options.addApiKey, home: accountHome }];
 }
 
 function validateAccounts(accounts, sharedHome) {
@@ -315,6 +451,42 @@ function backupPath(target) {
   return `${target}.cx-backup-${stamp}-${process.pid}`;
 }
 
+function localConfigPath() {
+  const base = process.env.XDG_CONFIG_HOME ? expandHomePath(process.env.XDG_CONFIG_HOME) : path.join(home, ".config");
+  return path.join(base, "codex-cx", "config.json");
+}
+
+function readLocalConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(localConfigPath(), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeLocalConfigPatch(values, options) {
+  const target = localConfigPath();
+  const next = { ...readLocalConfig(), ...values };
+  if (options.dryRun) {
+    console.log(`[dry-run] write ${target}`);
+    return;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  console.log(`wrote ${target}`);
+}
+
+function normalizeApiKeyMode(value, label = "api key mode") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/_/g, "-");
+  if (["prefer", "first", "api-key-first", "apikey-first", "apikey", "api-key"].includes(normalized)) {
+    return "prefer";
+  }
+  if (["fallback", "account-first", "after-limit", "limit-fallback", "limit-exhausted"].includes(normalized)) {
+    return "fallback";
+  }
+  throw new Error(`${label} must be prefer or fallback`);
+}
+
 function ensureDir(dir, options) {
   if (options.dryRun) {
     console.log(`[dry-run] mkdir -p ${dir}`);
@@ -373,6 +545,123 @@ function removeForLink(target, options) {
   fs.renameSync(target, backup);
 }
 
+function removeAccountHome(account, options) {
+  const existing = fs.lstatSync(account.home, { throwIfNoEntry: false });
+  if (!existing) {
+    console.log(`already absent ${account.home}`);
+    return;
+  }
+  const backup = backupPath(account.home);
+  if (options.dryRun) {
+    console.log(`[dry-run] mv ${account.home} ${backup}`);
+    return;
+  }
+  fs.renameSync(account.home, backup);
+  console.log(`removed ${account.name}: ${account.home} -> ${backup}`);
+}
+
+function selectorMatches(account, selector, accounts) {
+  const normalized = String(selector || "").trim().toLowerCase();
+  const index = accounts.indexOf(account);
+  return (
+    normalized === String(index + 1) ||
+    normalized === account.name.toLowerCase() ||
+    normalized === path.basename(account.home).toLowerCase() ||
+    normalized === path.basename(account.home).replace(/^\.codex-account-?/, "").toLowerCase()
+  );
+}
+
+function readApiKey(options) {
+  const sources = [options.apiKey !== null, Boolean(options.apiKeyEnv), options.apiKeyStdin].filter(Boolean).length;
+  if (sources !== 1) {
+    throw new Error("--add-api-key requires exactly one of --api-key, --api-key-env, or --api-key-stdin");
+  }
+  if (options.apiKey !== null) {
+    return String(options.apiKey).trim();
+  }
+  if (options.apiKeyEnv) {
+    return String(process.env[options.apiKeyEnv] || "").trim();
+  }
+  return fs.readFileSync(0, "utf8").trim();
+}
+
+function tomlString(value) {
+  return JSON.stringify(String(value));
+}
+
+function firstTableLine(lines) {
+  const index = lines.findIndex((line) => /^\s*\[/.test(line));
+  return index >= 0 ? index : lines.length;
+}
+
+function upsertTopLevelTomlStrings(file, values, options) {
+  const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  const lines = existing ? existing.replace(/\r\n/g, "\n").split("\n") : [];
+  if (lines.length > 0 && lines.at(-1) === "") {
+    lines.pop();
+  }
+
+  const pending = new Map(Object.entries(values).filter(([, value]) => value !== null && value !== undefined));
+  const tableIndex = firstTableLine(lines);
+  for (let index = 0; index < tableIndex; index += 1) {
+    const match = lines[index].match(/^\s*([A-Za-z0-9_-]+)\s*=/);
+    if (!match || !pending.has(match[1])) {
+      continue;
+    }
+    lines[index] = `${match[1]} = ${tomlString(pending.get(match[1]))}`;
+    pending.delete(match[1]);
+  }
+
+  if (pending.size > 0) {
+    const insert = [...pending.entries()].map(([key, value]) => `${key} = ${tomlString(value)}`);
+    lines.splice(tableIndex, 0, ...insert, ...(tableIndex === 0 && lines.length > 0 ? [""] : []));
+  }
+
+  if (options.dryRun) {
+    console.log(`[dry-run] write ${file}`);
+    return;
+  }
+  ensureParent(file, options);
+  fs.writeFileSync(file, `${lines.join("\n")}\n`, { mode: 0o600 });
+}
+
+function writeApiKeyAccount(account, options) {
+  const apiKey = readApiKey(options);
+  if (!apiKey) {
+    throw new Error("API key is empty");
+  }
+
+  const authPath = path.join(account.home, "auth.json");
+  const existingAuth = fs.lstatSync(authPath, { throwIfNoEntry: false });
+  if (existingAuth && !options.force) {
+    throw new Error(`${authPath} exists; use --force to replace it`);
+  }
+
+  const configValues = {
+    cli_auth_credentials_store: "file",
+    forced_login_method: "api",
+  };
+  if (options.model) {
+    configValues.model = options.model;
+  }
+  if (options.openaiBaseUrl) {
+    configValues.openai_base_url = options.openaiBaseUrl;
+  }
+
+  upsertTopLevelTomlStrings(path.join(account.home, "config.toml"), configValues, options);
+  if (options.dryRun) {
+    console.log(`[dry-run] write ${authPath}`);
+  } else {
+    ensureParent(authPath, options);
+    fs.writeFileSync(
+      authPath,
+      `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: apiKey }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+  }
+  console.log(`configured API-key account ${account.name} at ${account.home}`);
+}
+
 function linkItem(accountHome, sharedHome, item, options) {
   const source = path.join(sharedHome, item);
   const target = path.join(accountHome, item);
@@ -414,11 +703,58 @@ function linkItem(accountHome, sharedHome, item, options) {
 function setup(options) {
   const items = options.full ? fullSharedItems : defaultSharedItems;
   const sharedHome = path.resolve(options.sharedHome);
-  const homes = validateAccounts(accountHomes(options), sharedHome);
+  const shouldConfigureHomes =
+    options.accounts !== null ||
+    Boolean(options.homes) ||
+    Boolean(options.addApiKey) ||
+    options.prune ||
+    (!options.apiKeyMode && options.remove.length === 0);
+  const homes = shouldConfigureHomes ? validateAccounts(accountHomes(options), sharedHome) : [];
+  const selectedHomes = new Set(homes.map((account) => account.home));
+  const removableAccounts = validateAccounts(discoverAccountHomes(), sharedHome);
+  const activeHomes = activeCodexHomes();
+  const removeTargets = [];
+
+  if (options.apiKeyMode) {
+    writeLocalConfigPatch({ apiKeyMode: options.apiKeyMode }, options);
+  }
+
+  for (const selector of options.remove) {
+    const account = removableAccounts.find((candidate) => selectorMatches(candidate, selector, removableAccounts));
+    if (!account) {
+      throw new Error(`Unknown account to remove: ${selector}`);
+    }
+    removeTargets.push(account);
+  }
+  if (options.prune) {
+    if (options.accounts === null && !options.homes) {
+      throw new Error("--prune requires --accounts or --homes");
+    }
+    for (const account of removableAccounts) {
+      if (!selectedHomes.has(account.home)) {
+        removeTargets.push(account);
+      }
+    }
+  }
+
+  const uniqueRemoveTargets = [...new Map(removeTargets.map((account) => [account.home, account])).values()];
+  const activeRemoveTargets = uniqueRemoveTargets.filter((account) => activeHomes.has(account.home));
+  if (activeRemoveTargets.length > 0 && !options.allowActive && !options.dryRun) {
+    throw new Error(
+      `Refusing to remove active Codex homes: ${activeRemoveTargets.map((account) => account.home).join(", ")}. ` +
+        "Exit those Codex sessions first, or rerun with --allow-active if you accept the risk.",
+    );
+  }
+  for (const account of uniqueRemoveTargets) {
+    removeAccountHome(account, options);
+  }
+
   if (homes.length < 1) {
+    if (options.apiKeyMode || uniqueRemoveTargets.length > 0) {
+      return;
+    }
     throw new Error("No account homes selected. Use --accounts <N> on a new machine, or --homes name=/path,...");
   }
-  const activeHomes = activeCodexHomes();
   const activeTargets = homes.filter((account) => activeHomes.has(account.home));
 
   if (activeTargets.length > 0 && !options.allowActive && !options.dryRun) {
@@ -438,8 +774,16 @@ function setup(options) {
     console.log(`configured ${accountHome}`);
   }
 
+  if (options.addApiKey) {
+    const account = homes.find((candidate) => candidate.name.toLowerCase() === options.addApiKey.toLowerCase());
+    if (!account) {
+      throw new Error(`API-key account was not selected: ${options.addApiKey}`);
+    }
+    writeApiKeyAccount(account, options);
+  }
+
   console.log("\nNext steps:");
-  for (const account of homes) {
+  for (const account of homes.filter((candidate) => candidate.name !== options.addApiKey)) {
     console.log(`  CODEX_HOME=${account.home} codex login`);
   }
   console.log("  cx status");
@@ -458,6 +802,7 @@ module.exports = {
   defaultSharedItems,
   discoverAccountHomes,
   fullSharedItems,
+  normalizeApiKeyMode,
   parseArgs,
   parseHomes,
   setup,

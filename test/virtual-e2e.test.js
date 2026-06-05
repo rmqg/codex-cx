@@ -294,7 +294,7 @@ function runVirtualE2e() {
   ok("cx-setup", ["--accounts", "4", "--full", "--migrate"]);
 
   let result = ok("cx", ["status"]);
-  assert.match(result.stderr, /account4\s+-\s+100%\s+49%\s+5h>=100%/);
+  assert.match(result.stderr, /account4\s+-\s+account\s+100%\s+49%\s+5h>=100%/);
 
   const holder = spawn(path.join(fakeBin, "codex"), ["hold"], {
     env: { ...envBase, CODEX_HOME: path.join(root, ".codex-account2") },
@@ -336,6 +336,24 @@ function runVirtualE2e() {
   result = run("cx", ["--dry-run", "exec", "blocked"], { FAKE_LIMITS: exhaustedLimits });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /All candidate accounts are exhausted or unavailable/);
+
+  ok("cx-setup", [
+    "--add-api-key",
+    "free",
+    "--api-key",
+    "sk-free",
+    "--openai-base-url",
+    "https://ai2.hhhh.cc/v1",
+    "--model",
+    "gpt-5.5",
+    "--migrate",
+  ]);
+  result = ok("cxa", ["--dry-run", "exec", "default account first"]);
+  assert.match(result.stderr, /selected account1 \(account1@example\.com\)/);
+  result = ok("cxa", ["--dry-run", "exec", "api key first"], { CX_API_KEY_MODE: "prefer" });
+  assert.match(result.stderr, /selected free \(api-key\)/);
+  result = ok("cxa", ["--dry-run", "exec", "fallback to api key"], { FAKE_LIMITS: exhaustedLimits });
+  assert.match(result.stderr, /selected free \(api-key\)/);
 
   result = run("cx", ["status"], { CX_ACCOUNT_HOMES: `work=${root}/a,WORK=${root}/b` });
   assert.equal(result.status, 2);

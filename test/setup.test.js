@@ -5,7 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { parseArgs, parseHomes } = require("../bin/cx-setup");
+const { normalizeApiKeyMode, parseArgs, parseHomes } = require("../bin/cx-setup");
 
 function cleanEnv(extra = {}) {
   const env = { ...process.env };
@@ -13,6 +13,7 @@ function cleanEnv(extra = {}) {
   delete env.CX_ACCOUNT_COUNT;
   delete env.CX_ACCOUNT_HOMES;
   delete env.CX_AUTO_MAX_SWITCHES;
+  delete env.CX_API_KEY_MODE;
   delete env.CX_LIMIT_TIMEOUT_MS;
   return { ...env, ...extra };
 }
@@ -54,6 +55,32 @@ function cleanEnv(extra = {}) {
   assert.equal(options.sharedHome, path.resolve("/tmp/shared"));
 }
 
+{
+  const options = parseArgs([
+    "--add-api-key",
+    "free",
+    "--api-key-env",
+    "FREE_KEY",
+    "--openai-base-url",
+    "https://ai2.hhhh.cc/v1",
+    "--model",
+    "gpt-5.5",
+    "--api-key-mode",
+    "api-key-first",
+  ]);
+
+  assert.equal(options.addApiKey, "free");
+  assert.equal(options.apiKeyEnv, "FREE_KEY");
+  assert.equal(options.openaiBaseUrl, "https://ai2.hhhh.cc/v1");
+  assert.equal(options.model, "gpt-5.5");
+  assert.equal(options.apiKeyMode, "prefer");
+}
+
+{
+  assert.equal(normalizeApiKeyMode("prefer"), "prefer");
+  assert.equal(normalizeApiKeyMode("after-limit"), "fallback");
+}
+
 assert.throws(() => parseArgs(["--accounts", "0"]), /positive integer/);
 assert.throws(() => parseArgs(["--homes", ",,,"]), /at least one/);
 assert.throws(() => parseArgs(["--homes", "work="]), /include a path/);
@@ -69,6 +96,87 @@ assert.throws(() => parseArgs(["--homes", "work="]), /include a path/);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /No account homes selected/);
   assert.match(result.stderr, /--accounts <N>/);
+  fs.rmSync(tempHome, { recursive: true, force: true });
+}
+
+{
+  const setup = path.resolve(__dirname, "../bin/cx-setup");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-setup-apikey-"));
+  const configHome = path.join(tempHome, "xdg");
+  const result = spawnSync(
+    process.execPath,
+    [
+      setup,
+      "--add-api-key",
+      "free",
+      "--api-key-env",
+      "FREE_CODEX_KEY",
+      "--openai-base-url",
+      "https://ai2.hhhh.cc/v1",
+      "--model",
+      "gpt-5.5",
+      "--api-key-mode",
+      "prefer",
+      "--migrate",
+    ],
+    {
+      env: cleanEnv({ HOME: tempHome, XDG_CONFIG_HOME: configHome, FREE_CODEX_KEY: "sk-free" }),
+      encoding: "utf8",
+    },
+  );
+
+  const accountHome = path.join(tempHome, ".codex-account-free");
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    fs.readFileSync(path.join(accountHome, "auth.json"), "utf8"),
+    `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-free" }, null, 2)}\n`,
+  );
+  const config = fs.readFileSync(path.join(accountHome, "config.toml"), "utf8");
+  assert.match(config, /openai_base_url = "https:\/\/ai2\.hhhh\.cc\/v1"/);
+  assert.match(config, /model = "gpt-5\.5"/);
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(configHome, "codex-cx", "config.json"), "utf8")).apiKeyMode,
+    "prefer",
+  );
+  assert.equal(fs.lstatSync(path.join(accountHome, "sessions")).isSymbolicLink(), true);
+  fs.rmSync(tempHome, { recursive: true, force: true });
+}
+
+{
+  const setup = path.resolve(__dirname, "../bin/cx-setup");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-setup-remove-"));
+  fs.mkdirSync(path.join(tempHome, ".codex-account-free"));
+  fs.writeFileSync(path.join(tempHome, ".codex-account-free", "auth.json"), "{}\n");
+
+  const result = spawnSync(process.execPath, [setup, "--remove", "free"], {
+    env: cleanEnv({ HOME: tempHome }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(path.join(tempHome, ".codex-account-free")), false);
+  assert.ok(fs.readdirSync(tempHome).some((entry) => /^\.codex-account-free\.cx-backup-/.test(entry)));
+  fs.rmSync(tempHome, { recursive: true, force: true });
+}
+
+{
+  const setup = path.resolve(__dirname, "../bin/cx-setup");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-setup-prune-"));
+  fs.mkdirSync(path.join(tempHome, ".codex-account1"));
+  fs.mkdirSync(path.join(tempHome, ".codex-account2"));
+  fs.mkdirSync(path.join(tempHome, ".codex-account-free"));
+
+  const result = spawnSync(process.execPath, [setup, "--accounts", "1", "--prune", "--migrate"], {
+    env: cleanEnv({ HOME: tempHome }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(path.join(tempHome, ".codex-account1")), true);
+  assert.equal(fs.existsSync(path.join(tempHome, ".codex-account2")), false);
+  assert.equal(fs.existsSync(path.join(tempHome, ".codex-account-free")), false);
+  assert.ok(fs.readdirSync(tempHome).some((entry) => /^\.codex-account2\.cx-backup-/.test(entry)));
+  assert.ok(fs.readdirSync(tempHome).some((entry) => /^\.codex-account-free\.cx-backup-/.test(entry)));
   fs.rmSync(tempHome, { recursive: true, force: true });
 }
 
