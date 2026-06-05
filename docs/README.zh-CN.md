@@ -177,7 +177,7 @@ cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
 
 ## 自动切号
 
-运行期间，`cx` 会监控 Codex TUI 日志里的 usage-limit 错误。它会识别旧的 `workspace_owner_credits_depleted`/`credits_depleted` 字段、新版 `Turn error: Your workspace is out of credits` 文案，以及结构化 Goal 模式 usage-limit 日志。它会忽略工具调用文本或命令输出里只是“提到”这些额度字样的内容。一旦检测到真实额度限制，`cx` 会终止当前 Codex 进程，把该账号标记为本轮已耗尽，然后切到另一个可用账号。
+运行期间，`cx` 会监控 Codex TUI 日志里的 usage-limit 错误。它会识别 Codex 自己的 `You've hit your usage limit`、`Your workspace is out of credits`、workspace credits/spend cap reached 类型、带 Codex HTTP 429 的 `Turn error`，以及结构化 Goal 模式 usage-limit 日志。它会忽略工具调用文本、命令输出，以及 GitHub curated-plugin sync 429 这类外部服务限流。一旦检测到真实额度限制，`cx` 会终止当前 Codex 进程，把该账号标记为本轮已耗尽，然后切到另一个可用账号。
 
 重试路径取决于触发额度限制时的会话状态：
 
@@ -210,13 +210,16 @@ CX_NO_BYPASS=1
 CX_NO_TRUST=1
 CX_AUTO_RESUME_GOAL=0
 CX_LIMIT_TIMEOUT_MS=15000
+CX_LIMIT_RETRIES=2
 CX_AUTO_MAX_SWITCHES=5
 CX_INTERACTIVE_AUTO_EXEC=0
 ```
 
 `CX_ACCOUNT` 等价于 `--account`：它会禁用探测、排序和自动切号，只使用指定账号。
 
-`CX_ACCOUNT_COUNT`、`CX_LIMIT_TIMEOUT_MS`、`CX_AUTO_MAX_SWITCHES` 必须是正整数。
+`CX_ACCOUNT_COUNT`、`CX_LIMIT_TIMEOUT_MS`、`CX_LIMIT_RETRIES`、`CX_AUTO_MAX_SWITCHES` 必须是正整数。
+
+`CX_LIMIT_TIMEOUT_MS` 作用于每一次 app-server 额度探测。`CX_LIMIT_RETRIES` 控制每个账号最多探测几次；缺少 `auth.json` 仍然会立即报错，不会重试。
 
 默认情况下，`cx` 会在没有显式 sandbox 或 approval 参数时添加 `--dangerously-bypass-approvals-and-sandbox`。可以用 `--no-bypass` 或 `CX_NO_BYPASS=1` 关闭这个默认行为。
 
@@ -231,6 +234,7 @@ CX_INTERACTIVE_AUTO_EXEC=0
 - `No Codex account homes found`：新环境先运行 `cx-setup --accounts <N> --migrate`，或设置 `CX_ACCOUNT_HOMES`。
 - `missing ~/.codex-accountN/auth.json`：运行 `CODEX_HOME=~/.codex-accountN codex login`。
 - `All candidate accounts are exhausted or unavailable`：所有账号都探测失败、未登录或触达了 5h/weekly 限制。
+- `failed to fetch codex rate limits` 这类探测错误：如果只是临时网络慢，可以调高 `CX_LIMIT_TIMEOUT_MS` 或 `CX_LIMIT_RETRIES`。
 - `cx status` 不显示 active：active 检测依赖 Linux `/proc`。
 - 自动切号后停在目录信任提示：确认正在使用新版 `cx`；新版默认会注入当前工作根的 trust 配置。如果你设置了 `CX_NO_TRUST=1` 或 `--no-trust`，需要取消它或手动信任目录。
 - 自动切号后 resume 到错误会话：运行 `cx-setup --migrate` 或 `cx-setup --full --migrate`，确保所有账号共享 `sessions`。

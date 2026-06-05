@@ -205,9 +205,27 @@ function tokenCountWithoutCredits() {
     true,
   );
   assert.equal(isUsageLimitLogLine("■ Your workspace is out of credits. Add credits to continue."), true);
+  assert.equal(
+    isUsageLimitLogLine(
+      "■ You're out of credits. Your workspace is out of credits. Add credits to continue using Codex.",
+    ),
+    true,
+  );
+  assert.equal(
+    isUsageLimitLogLine(
+      "■ Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex.",
+    ),
+    true,
+  );
   assert.equal(isUsageLimitLogLine("2026-06-04T03:28:15.620801Z  INFO codex_tui: Goal hit usage limits (/goal resume)"), true);
   assert.equal(isUsageLimitLogLine("Goal hit usage limits (/goal resume)"), false);
-  assert.equal(isUsageLimitLogLine("ERROR: unexpected status 429 Too Many Requests"), true);
+  assert.equal(isUsageLimitLogLine("ERROR: unexpected status 429 Too Many Requests"), false);
+  assert.equal(
+    isUsageLimitLogLine(
+      "2026-06-04T01:00:00Z ERROR session_loop: Turn error: HTTP status client error (429 Too Many Requests)",
+    ),
+    true,
+  );
   assert.equal(
     isUsageLimitLogLine(
       '2026-06-04T01:00:00Z INFO codex_core::stream_events_utils: ToolCall: exec_command {"cmd":"rg -n \\"usage limit|rate limit\\" /tmp"}',
@@ -217,6 +235,18 @@ function tokenCountWithoutCredits() {
   assert.equal(
     isUsageLimitLogLine(
       '2026-06-04T01:00:00Z INFO codex_core::stream_events_utils: ToolCall: exec_command {"cmd":"printf \\"Your workspace is out of credits\\""}',
+    ),
+    false,
+  );
+  assert.equal(
+    isUsageLimitLogLine(
+      "2026-06-05T02:18:57.965736Z  WARN codex_core_plugins::startup_sync: GitHub HTTP sync failed for curated plugin sync; skipping export archive fallback because a local curated plugins snapshot already exists error=download curated plugins archive from https://api.github.com/repos/openai/plugins/zipball/9c1190e46c5c6d9ccad67b6155aeb532b1ccbc27 failed with status 429 Too Many Requests: You have exceeded a secondary rate limit.",
+    ),
+    false,
+  );
+  assert.equal(
+    isUsageLimitLogLine(
+      "致命错误：无法访问 'https://github.com/openai/plugins.git/'：GitHub HTTP sync failed for curated plugin sync: failed with status 429 Too Many Requests: You have exceeded a secondary rate limit.",
     ),
     false,
   );
@@ -433,6 +463,17 @@ function tokenCountWithoutCredits() {
 
   assert.equal(result.status, 2);
   assert.match(result.stderr, /CX_AUTO_MAX_SWITCHES must be a positive integer/);
+}
+
+{
+  const cx = path.resolve(__dirname, "../bin/cx");
+  const result = spawnSync(process.execPath, [cx, "status"], {
+    env: cleanEnv({ CX_LIMIT_RETRIES: "0" }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /CX_LIMIT_RETRIES must be a positive integer/);
 }
 
 {

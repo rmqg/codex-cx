@@ -12,14 +12,18 @@ const packageVersion = readPackageVersion();
 const weeklySimilarDelta = 5;
 const primarySimilarDelta = 20;
 const rateLimitTextPattern =
-  /(?:usage limits?|rate limit|limit reached|429|workspace_owner_credits_depleted|credits_depleted|out of credits|You've hit your usage limit)/i;
+  /(?:usage limits?|out of credits|credits_depleted|usage_limit_reached|rate_limit_reached|spend cap|insufficient_quota|requires_payment_method|exceeded your current quota|429|Too Many Requests)/i;
 const rateLimitReasonPattern =
-  /(?:usage limits?|rate limit|limit reached|429|workspace_owner_credits_depleted|credits_depleted|out of credits|You've hit your usage limit)/i;
+  /(?:You've hit your usage limit|You've reached your usage limit|Usage limit reached|Your workspace is out of credits|You're out of credits|You exceeded your current quota|insufficient_quota|requires_payment_method|workspace_(?:owner|member)_(?:credits_depleted|usage_limit_reached)|\bcredits_depleted\b|\brate_limit_reached\b|You hit your spend cap)/i;
 const turnErrorRateLimitPattern = new RegExp(`\\bTurn error:.*${rateLimitReasonPattern.source}`, "i");
+const turnErrorHttpRateLimitPattern = /\bTurn error:.*(?:429|Too Many Requests|HTTP status client error)/i;
 const structuredGoalUsageLimitPattern =
   /^(?:\d{4}-\d{2}-\d{2}T.*\b(?:INFO|WARN|ERROR)\b.*|(?:INFO|WARN|ERROR):?\s+.*)Goal hit usage limits\b/i;
 const rateLimitUiPattern =
-  /^■\s*(?:Your workspace is out of credits\. Add credits to continue\.|You've hit your usage limit\b)/i;
+  /^■\s*(?:Your workspace is out of credits\b|You're out of credits\b|Usage limit reached\b|You've hit your usage limit\b)/i;
+const nonAccountRateLimitPattern =
+  /(?:codex_core_plugins::startup_sync|GitHub HTTP sync failed|curated plugin sync|api\.github\.com\/repos\/openai\/plugins|github\.com\/openai\/plugins(?:\.git)?|docs\.github\.com\/en\/site-policy\/github-terms|You have exceeded a secondary rate limit)/i;
+const logLevelLinePattern = /^(?:\d{4}-\d{2}-\d{2}T.*\b(?:INFO|WARN|ERROR)\b.*|(?:INFO|WARN|ERROR):?\b.*)/i;
 const continuationPrompt =
   "Continue the interrupted task from the last user instruction in this session. " +
   "The previous account hit a usage limit before completing the turn; do not ask the user to repeat it.";
@@ -122,9 +126,9 @@ let terminating = false;
 
 function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.7";
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.8";
   } catch {
-    return "0.5.7";
+    return "0.5.8";
   }
 }
 
@@ -147,6 +151,7 @@ Environment:
   CX_NO_TRUST=1                                 Do not inject project trust for the current workdir.
   CX_AUTO_RESUME_GOAL=0                         Do not reactivate paused/limited goals before resume.
   CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
+  CX_LIMIT_RETRIES=2                            Rate-limit probe attempts per account.
   CX_AUTO_MAX_SWITCHES=5                        Max automatic account switches per run.
   CX_INTERACTIVE_AUTO_EXEC=0                    Resume interrupted interactive turns in TUI mode.
 `);
@@ -234,10 +239,15 @@ function getRuntimeConfig() {
   if (!runtimeConfigCache) {
     runtimeConfigCache = {
       timeoutMs: parsePositiveInteger(process.env.CX_LIMIT_TIMEOUT_MS, 15000, "CX_LIMIT_TIMEOUT_MS"),
+      limitRetries: parsePositiveInteger(process.env.CX_LIMIT_RETRIES, 2, "CX_LIMIT_RETRIES"),
       autoMaxSwitches: parsePositiveInteger(process.env.CX_AUTO_MAX_SWITCHES, 5, "CX_AUTO_MAX_SWITCHES"),
     };
   }
   return runtimeConfigCache;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function naturalAccountSort(a, b) {
@@ -399,15 +409,27 @@ function accountMatches(account, selector, accounts = getDefaultAccounts()) {
   );
 }
 
-function readRateLimits(account) {
+async function readRateLimits(account, options = {}) {
   const authPath = path.join(account.home, "auth.json");
   if (!fs.existsSync(authPath)) {
     return Promise.resolve({ account, ok: false, error: `missing ${authPath}` });
   }
 
-  return appServerRequest(account.home, "account/rateLimits/read", null)
-    .then((result) => ({ account, ok: true, limits: extractCodexLimit(result) }))
-    .catch((error) => ({ account, ok: false, error: error.message || "rate-limit read failed" }));
+  const limitRetries = options.limitRetries || getRuntimeConfig().limitRetries;
+  let lastError = null;
+  for (let attempt = 1; attempt <= limitRetries; attempt += 1) {
+    try {
+      const result = await appServerRequest(account.home, "account/rateLimits/read", null);
+      return { account, ok: true, limits: extractCodexLimit(result) };
+    } catch (error) {
+      lastError = error;
+      if (attempt < limitRetries) {
+        await sleep(500);
+      }
+    }
+  }
+
+  return { account, ok: false, error: lastError?.message || "rate-limit read failed" };
 }
 
 function appServerRequest(accountHome, method, params, options = {}) {
@@ -1224,7 +1246,7 @@ function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
 async function probeAccounts(excludedNames = new Set(), options = {}) {
   const activeNames = options.activeNames || getActiveAccountNames();
   const accounts = getDefaultAccounts().filter((account) => !excludedNames.has(account.name));
-  const results = await Promise.all(accounts.map(readRateLimits));
+  const results = await Promise.all(accounts.map((account) => readRateLimits(account)));
   for (const result of results) {
     result.active = activeNames.has(result.account.name);
   }
@@ -1271,6 +1293,9 @@ function isUsageLimitLogLine(line) {
   if (trimmed.includes("ToolCall:") || trimmed.includes("codex_core::stream_events_utils")) {
     return false;
   }
+  if (nonAccountRateLimitPattern.test(trimmed)) {
+    return false;
+  }
   if (rateLimitUiPattern.test(trimmed)) {
     return true;
   }
@@ -1280,16 +1305,10 @@ function isUsageLimitLogLine(line) {
   if (structuredGoalUsageLimitPattern.test(trimmed)) {
     return true;
   }
-  if (
-    /^\d{4}-\d{2}-\d{2}T.*\b(?:ERROR|WARN)\b.*(?:Turn error:|You've hit your usage limit|workspace_owner_credits_depleted|credits_depleted|out of credits|429)/i.test(
-      trimmed,
-    )
-  ) {
+  if (turnErrorHttpRateLimitPattern.test(trimmed)) {
     return true;
   }
-  return /^(?:ERROR|WARN):?\b.*(?:Turn error:|You've hit your usage limit|workspace_owner_credits_depleted|credits_depleted|out of credits|429)/i.test(
-    trimmed,
-  );
+  return logLevelLinePattern.test(trimmed) && rateLimitReasonPattern.test(trimmed);
 }
 
 function logChunkHasUsageLimit(chunk) {

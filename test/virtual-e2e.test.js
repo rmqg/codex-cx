@@ -25,6 +25,17 @@ function append(data) { if (records) fs.appendFileSync(records, JSON.stringify(d
 function send(data) { process.stdout.write(JSON.stringify(data) + '\\n'); }
 function limits() { return JSON.parse(process.env.FAKE_LIMITS || '{}')[account] || { p: 99, s: 99, r: '' }; }
 function goals() { return JSON.parse(process.env.FAKE_GOALS || '{}')[account] || {}; }
+function shouldFailLimitReadOnce() {
+  if (process.env.FAKE_LIMIT_FAIL_ONCE !== '1') return false;
+  const markerDir = process.env.FAKE_LIMIT_FAIL_ONCE_DIR || path.dirname(records || home);
+  fs.mkdirSync(markerDir, { recursive: true });
+  try {
+    fs.writeFileSync(path.join(markerDir, 'limit-read-' + account), '1', { flag: 'wx' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 function logDir() {
   let value = args.find((arg) => arg.startsWith('log_dir='));
   for (let index = 0; !value && index < args.length; index += 1) {
@@ -76,6 +87,10 @@ if (args[0] === 'app-server') {
       const msg = JSON.parse(line);
       if (msg.method === 'initialize') send({ id: msg.id, result: { ok: true } });
       if (msg.method === 'account/rateLimits/read') {
+        if (shouldFailLimitReadOnce()) {
+          send({ id: msg.id, error: { message: 'failed to fetch codex rate limits: error sending request for url (https://chatgpt.com/backend-api/wham/usage)' } });
+          continue;
+        }
         const x = limits();
         send({ id: msg.id, result: { rateLimitsByLimitId: { codex: {
           primary: { usedPercent: x.p },
@@ -267,6 +282,13 @@ function runVirtualE2e() {
   assert.match(result.stderr, /selected account1/);
   assert.match(result.stderr, /exec hello/);
   assert.match(result.stderr, /trust_level="trusted"/);
+
+  result = ok("cx", ["--dry-run", "exec", "retry probe"], {
+    FAKE_LIMIT_FAIL_ONCE: "1",
+    FAKE_LIMIT_FAIL_ONCE_DIR: path.join(root, "limit-fail-once"),
+  });
+  assert.match(result.stderr, /selected account1/);
+  assert.match(result.stderr, /exec 'retry probe'|exec retry probe/);
 
   result = ok("cx", ["--account", "4", "--dry-run", "--no-bypass", "exec", "hello"]);
   assert.match(result.stderr, /\.codex-account4/);

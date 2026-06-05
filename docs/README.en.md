@@ -177,7 +177,7 @@ Remaining accounts are sorted with this policy:
 
 ## Auto-Switching
 
-During a run, `cx` watches the Codex TUI log for usage-limit errors. It recognizes older `workspace_owner_credits_depleted`/`credits_depleted` fields, newer `Turn error: Your workspace is out of credits` text, and structured Goal-mode usage-limit logs. It ignores tool-call text or command output that merely mentions those quota words. If a real usage limit is detected, `cx` terminates the current Codex process, marks that account exhausted for the current wrapper run, and switches to another usable account.
+During a run, `cx` watches the Codex TUI log for usage-limit errors. It recognizes Codex's own limit messages such as `You've hit your usage limit`, `Your workspace is out of credits`, workspace credit/spend-cap reached types, `Turn error` lines with Codex HTTP 429 responses, and structured Goal-mode usage-limit logs. It ignores tool-call text, command output, and external service throttling such as GitHub curated-plugin sync 429s. If a real usage limit is detected, `cx` terminates the current Codex process, marks that account exhausted for the current wrapper run, and switches to another usable account.
 
 The retry path depends on what happened before the limit:
 
@@ -210,13 +210,16 @@ CX_NO_BYPASS=1
 CX_NO_TRUST=1
 CX_AUTO_RESUME_GOAL=0
 CX_LIMIT_TIMEOUT_MS=15000
+CX_LIMIT_RETRIES=2
 CX_AUTO_MAX_SWITCHES=5
 CX_INTERACTIVE_AUTO_EXEC=0
 ```
 
 `CX_ACCOUNT` behaves like `--account`: it disables probing, sorting, and auto-switching and uses only the selected account.
 
-`CX_ACCOUNT_COUNT`, `CX_LIMIT_TIMEOUT_MS`, and `CX_AUTO_MAX_SWITCHES` must be positive integers.
+`CX_ACCOUNT_COUNT`, `CX_LIMIT_TIMEOUT_MS`, `CX_LIMIT_RETRIES`, and `CX_AUTO_MAX_SWITCHES` must be positive integers.
+
+`CX_LIMIT_TIMEOUT_MS` applies to each app-server rate-limit probe attempt. `CX_LIMIT_RETRIES` controls how many times each account is probed before it is treated as temporarily unavailable; missing `auth.json` is still reported immediately.
 
 By default, `cx` adds `--dangerously-bypass-approvals-and-sandbox` unless a sandbox or approval option is already present. Use `--no-bypass` or `CX_NO_BYPASS=1` to disable that default.
 
@@ -231,6 +234,7 @@ By default, interrupted interactive turns continue through `codex exec resume ..
 - `No Codex account homes found`: on a new machine, run `cx-setup --accounts <N> --migrate`, or set `CX_ACCOUNT_HOMES`.
 - `missing ~/.codex-accountN/auth.json`: run `CODEX_HOME=~/.codex-accountN codex login`.
 - `All candidate accounts are exhausted or unavailable`: all probed accounts failed login/probing or hit a 5h/weekly limit.
+- Probe errors like `failed to fetch codex rate limits`: increase `CX_LIMIT_TIMEOUT_MS` or `CX_LIMIT_RETRIES` if the network is temporarily slow.
 - `cx status` does not show active accounts: active detection reads `/proc`, so it is Linux-focused.
 - Auto-switch stops at the directory trust prompt: confirm the installed `cx` is current. Current versions inject trust for the work root by default; if `CX_NO_TRUST=1` or `--no-trust` is set, unset it or trust the directory manually.
 - Auto-switch resumes the wrong conversation: run `cx-setup --migrate` or `cx-setup --full --migrate` so all account homes share `sessions`.
