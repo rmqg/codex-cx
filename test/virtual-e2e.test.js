@@ -353,7 +353,7 @@ function runVirtualE2e() {
   assert.equal(runs.length, 2, JSON.stringify(runs));
   assert.equal(path.basename(runs[0].home), ".codex-account1");
   assert.equal(path.basename(runs[1].home), ".codex-account3");
-  assert.ok(runs[1].args.includes("exec"));
+  assert.equal(runs[1].args.includes("exec"), false);
   assert.ok(runs[1].args.includes("resume"));
   assert.deepEqual(runs[1].args.slice(-2, -1), ["--last"]);
   assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
@@ -379,7 +379,7 @@ function runVirtualE2e() {
   runs = readRecords().filter((entry) => entry.type === "run");
   assert.equal(runs.length, 2, JSON.stringify(runs));
   assert.equal(path.basename(runs[1].home), ".codex-account3");
-  assert.ok(runs[1].args.includes("exec"));
+  assert.equal(runs[1].args.includes("exec"), false);
   assert.ok(runs[1].args.includes("resume"));
   assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
 

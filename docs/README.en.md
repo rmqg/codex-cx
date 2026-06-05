@@ -182,17 +182,17 @@ During a run, `cx` watches the Codex TUI log for usage-limit errors. It recogniz
 The retry path depends on what happened before the limit:
 
 ```sh
-codex resume --last
+codex resume --last "Continue the interrupted task ..."
 codex exec resume --last "Continue the interrupted task ..."
 ```
 
-If the last turn in the current session completed normally and produced assistant output, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, or Codex wrote `task_complete` for an out-of-credits turn with an empty `last_agent_message`, `cx` resumes it through `codex exec resume --last "Continue ..."` so the next account continues that pending instruction. This deliberately avoids passing a prompt to interactive `codex resume --last`, because current Codex CLI versions treat that extra positional argument as a session ID. After the resumed exec turn finishes, Codex exits; start `cxr` again if you want to keep chatting in the TUI.
+If the last turn in the current session completed normally and produced assistant output, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, or Codex wrote `task_complete` for an out-of-credits turn with an empty `last_agent_message`, `cx` resumes it through `codex resume --last "Continue ..."` so the next account opens the TUI and submits a continuation prompt for that pending instruction.
 
 For `cx exec ...`, retries use `codex exec resume --last "Continue ..."` so non-interactive sessions keep their mode and can explicitly continue the pending instruction. If the original command was `cx exec resume <session-id>`, the retry keeps that explicit session id instead of switching to `--last`.
 
 For `cx resume ...`, `cxr`, and `cx exec resume ...`, `cx` checks the target session for a paused, usage-limited, or blocked goal before launching Codex. If one exists, it uses Codex app-server to mark the goal active, then continues with the original command; if there is no goal or the goal is complete, the existing resume behavior is unchanged.
 
-Set `CX_INTERACTIVE_AUTO_EXEC=0` to disable the interactive-to-exec continuation behavior and reopen the TUI with plain `codex resume --last` instead.
+Set `CX_INTERACTIVE_AUTO_EXEC=1` to force the older non-interactive `codex exec resume ...` continuation path for interrupted interactive turns.
 
 If the limited process did not create a current session file, `cx` retries the original command on the next account instead of blindly resuming an unrelated older session.
 
@@ -212,7 +212,7 @@ CX_AUTO_RESUME_GOAL=0
 CX_LIMIT_TIMEOUT_MS=15000
 CX_LIMIT_RETRIES=2
 CX_AUTO_MAX_SWITCHES=5
-CX_INTERACTIVE_AUTO_EXEC=0
+CX_INTERACTIVE_AUTO_EXEC=1
 ```
 
 `CX_ACCOUNT` behaves like `--account`: it disables probing, sorting, and auto-switching and uses only the selected account.
@@ -227,7 +227,7 @@ By default, `cx` trusts the work root used for the launch so account switches ar
 
 By default, resume commands automatically reactivate paused, usage-limited, or blocked goals. Set `CX_AUTO_RESUME_GOAL=0` to disable this preflight.
 
-By default, interrupted interactive turns continue through `codex exec resume ...` after an automatic account switch. Set `CX_INTERACTIVE_AUTO_EXEC=0` to keep the older conservative behavior, which only reopens the TUI with `codex resume --last`.
+By default, interrupted interactive turns continue through TUI `codex resume --last "Continue ..."` after an automatic account switch. Set `CX_INTERACTIVE_AUTO_EXEC=1` to force non-interactive `codex exec resume ...` instead.
 
 ## Troubleshooting
 

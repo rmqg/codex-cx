@@ -77,6 +77,10 @@ function userMessage(text) {
   };
 }
 
+function userEventMessage(text) {
+  return { type: "event_msg", payload: { type: "user_message", message: text } };
+}
+
 function assistantMessage(text) {
   return {
     type: "response_item",
@@ -563,8 +567,8 @@ function tokenCountWithoutCredits() {
 
   assert.deepEqual(
     retryArgs,
-    ["exec", "resume", "--last", retryArgs.at(-1)],
-    "usage-limited turns with task_complete but no assistant output are continued through exec resume",
+    ["resume", "--last", retryArgs.at(-1)],
+    "usage-limited interactive turns with task_complete but no assistant output continue through TUI resume",
   );
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
@@ -667,8 +671,8 @@ function tokenCountWithoutCredits() {
 
   assert.deepEqual(
     retryArgs,
-    ["-m", "gpt-5", "exec", "resume", "--last", retryArgs.at(-1)],
-    "incomplete interactive turns preserve global options and continue through exec resume",
+    ["-m", "gpt-5", "resume", "--last", retryArgs.at(-1)],
+    "incomplete interactive turns preserve global options and continue through TUI resume",
   );
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
@@ -685,8 +689,8 @@ function tokenCountWithoutCredits() {
 
   assert.deepEqual(
     retryArgs,
-    ["exec", "resume", "--last", retryArgs.at(-1)],
-    "interactive resume retries continue through exec resume instead of passing a prompt to interactive resume",
+    ["resume", "--last", retryArgs.at(-1)],
+    "interactive resume retries continue through TUI resume with a prompt",
   );
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
@@ -701,7 +705,7 @@ function tokenCountWithoutCredits() {
     minMtimeMs: Date.now() - 1000,
   });
 
-  assert.deepEqual(retryArgs.slice(0, 3), ["exec", "resume", "019e-interactive-session"]);
+  assert.deepEqual(retryArgs.slice(0, 2), ["resume", "019e-interactive-session"]);
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
   fs.rmSync(accountHome, { recursive: true, force: true });
@@ -711,7 +715,7 @@ function tokenCountWithoutCredits() {
   const accountHome = tempAccountHome();
   writeSession(accountHome, [taskStarted(), userMessage("resume work")]);
   const previous = process.env.CX_INTERACTIVE_AUTO_EXEC;
-  process.env.CX_INTERACTIVE_AUTO_EXEC = "0";
+  process.env.CX_INTERACTIVE_AUTO_EXEC = "1";
 
   try {
     const retryArgs = retryArgsAfterRateLimit(["resume", "--last"], accountHome, {
@@ -720,9 +724,10 @@ function tokenCountWithoutCredits() {
 
     assert.deepEqual(
       retryArgs,
-      ["resume", "--last"],
-      "CX_INTERACTIVE_AUTO_EXEC=0 preserves the conservative TUI resume behavior",
+      ["exec", "resume", "--last", retryArgs.at(-1)],
+      "CX_INTERACTIVE_AUTO_EXEC=1 preserves the non-interactive exec resume behavior",
     );
+    assert.match(retryArgs.at(-1), /Continue the interrupted task/);
   } finally {
     if (previous === undefined) {
       delete process.env.CX_INTERACTIVE_AUTO_EXEC;
@@ -737,14 +742,15 @@ function tokenCountWithoutCredits() {
   const accountHome = tempAccountHome();
   writeSession(accountHome, [taskStarted(), userMessage("resume explicit session")]);
   const previous = process.env.CX_INTERACTIVE_AUTO_EXEC;
-  process.env.CX_INTERACTIVE_AUTO_EXEC = "0";
+  process.env.CX_INTERACTIVE_AUTO_EXEC = "1";
 
   try {
     const retryArgs = retryArgsAfterRateLimit(["resume", "019e-interactive-session"], accountHome, {
       minMtimeMs: Date.now() - 1000,
     });
 
-    assert.deepEqual(retryArgs, ["resume", "019e-interactive-session"]);
+    assert.deepEqual(retryArgs.slice(0, 3), ["exec", "resume", "019e-interactive-session"]);
+    assert.match(retryArgs.at(-1), /Continue the interrupted task/);
   } finally {
     if (previous === undefined) {
       delete process.env.CX_INTERACTIVE_AUTO_EXEC;
@@ -753,6 +759,22 @@ function tokenCountWithoutCredits() {
     }
     fs.rmSync(accountHome, { recursive: true, force: true });
   }
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [taskStarted(), userEventMessage("resume event message")]);
+
+  const retryArgs = retryArgsAfterRateLimit(["resume", "--last"], accountHome, { minMtimeMs: Date.now() - 1000 });
+
+  assert.deepEqual(
+    retryArgs,
+    ["resume", "--last", retryArgs.at(-1)],
+    "event_msg user_message is enough to continue an interrupted interactive turn",
+  );
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
 }
 
 {

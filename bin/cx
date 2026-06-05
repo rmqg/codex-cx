@@ -126,9 +126,9 @@ let terminating = false;
 
 function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.8";
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.9";
   } catch {
-    return "0.5.8";
+    return "0.5.9";
   }
 }
 
@@ -153,7 +153,7 @@ Environment:
   CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
   CX_LIMIT_RETRIES=2                            Rate-limit probe attempts per account.
   CX_AUTO_MAX_SWITCHES=5                        Max automatic account switches per run.
-  CX_INTERACTIVE_AUTO_EXEC=0                    Resume interrupted interactive turns in TUI mode.
+  CX_INTERACTIVE_AUTO_EXEC=1                    Resume interrupted interactive turns in exec mode.
 `);
 }
 
@@ -1091,7 +1091,10 @@ function latestSessionTurnState(accountHome, options = {}) {
       continue;
     }
 
-    if (event.type === "response_item" && payload.type === "message" && payload.role === "user") {
+    if (
+      (event.type === "response_item" && payload.type === "message" && payload.role === "user") ||
+      (event.type === "event_msg" && payload.type === "user_message")
+    ) {
       state.sawUser = true;
     } else if (event.type === "response_item" && payload.type === "message" && payload.role === "assistant") {
       state.sawAssistant = true;
@@ -1133,7 +1136,13 @@ function resumeArgsFromAnalysis(analysis, prompt) {
     ];
   }
 
-  return [...analysis.globalArgs, "resume", ...analysis.resumeOptions, ...(analysis.resumeTargetArgs || ["--last"])];
+  return [
+    ...analysis.globalArgs,
+    "resume",
+    ...analysis.resumeOptions,
+    ...(analysis.resumeTargetArgs || ["--last"]),
+    ...(prompt ? [prompt] : []),
+  ];
 }
 
 function execResumeArgsFromInteractiveAnalysis(analysis, prompt) {
@@ -1230,7 +1239,7 @@ function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
   let prompt = null;
   if (sessionState.incomplete) {
     prompt = continuationPrompt;
-    if (analysis.mode === "interactive" && process.env.CX_INTERACTIVE_AUTO_EXEC !== "0") {
+    if (analysis.mode === "interactive" && process.env.CX_INTERACTIVE_AUTO_EXEC === "1") {
       return execResumeArgsFromInteractiveAnalysis(analysis, prompt);
     }
   } else if (!sessionState.completed && analysis.prompt) {
