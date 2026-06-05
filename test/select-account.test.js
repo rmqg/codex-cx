@@ -55,10 +55,10 @@ function base64UrlJson(value) {
     .replace(/\//g, "_");
 }
 
-function writeSession(accountHome, events) {
+function writeSession(accountHome, events, options = {}) {
   const dir = path.join(accountHome, "sessions", "2026", "06", "03");
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `rollout-test-${process.pid}-${Math.random().toString(16).slice(2)}.jsonl`);
+  const file = path.join(dir, options.fileName || `rollout-test-${process.pid}-${Math.random().toString(16).slice(2)}.jsonl`);
   fs.writeFileSync(
     file,
     events
@@ -596,8 +596,8 @@ function tokenCountWithoutCredits() {
 
   assert.deepEqual(
     retryArgs,
-    ["resume", "--last", retryArgs.at(-1)],
-    "usage-limited interactive turns with task_complete but no assistant output continue through TUI resume",
+    ["exec", "resume", "--last", retryArgs.at(-1)],
+    "usage-limited interactive turns without a session id fall back to exec resume so the prompt is not parsed as an id",
   );
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
@@ -622,8 +622,8 @@ function tokenCountWithoutCredits() {
 
   assert.deepEqual(
     retryArgs,
-    ["resume", "--last", retryArgs.at(-1)],
-    "usage-limited turns with a queued follow-up after earlier assistant output still receive a continuation prompt",
+    ["exec", "resume", "--last", retryArgs.at(-1)],
+    "queued follow-ups without a session id fall back to exec resume so the prompt is not parsed as an id",
   );
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
@@ -726,8 +726,8 @@ function tokenCountWithoutCredits() {
 
   assert.deepEqual(
     retryArgs,
-    ["-m", "gpt-5", "resume", "--last", retryArgs.at(-1)],
-    "incomplete interactive turns preserve global options and continue through TUI resume",
+    ["-m", "gpt-5", "exec", "resume", "--last", retryArgs.at(-1)],
+    "incomplete interactive turns without a session id preserve global options and fall back to exec resume",
   );
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
@@ -744,8 +744,8 @@ function tokenCountWithoutCredits() {
 
   assert.deepEqual(
     retryArgs,
-    ["resume", "--last", retryArgs.at(-1)],
-    "interactive resume retries continue through TUI resume with a prompt",
+    ["exec", "resume", "--last", retryArgs.at(-1)],
+    "interactive resume retries without a session id fall back to exec resume with a prompt",
   );
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
@@ -824,8 +824,8 @@ function tokenCountWithoutCredits() {
 
   assert.deepEqual(
     retryArgs,
-    ["resume", "--last", retryArgs.at(-1)],
-    "event_msg user_message is enough to continue an interrupted interactive turn",
+    ["exec", "resume", "--last", retryArgs.at(-1)],
+    "event_msg user_message without a session id falls back to exec resume",
   );
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
@@ -845,6 +845,27 @@ function tokenCountWithoutCredits() {
     retryArgs,
     ["resume", threadId, retryArgs.at(-1)],
     "usage-limited interactive retries target the interrupted session id instead of target-account --last",
+  );
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  const threadId = "019eaaaa-bbbb-7ccc-8ddd-000000000125";
+  writeSession(accountHome, [taskStarted(), userMessage("resume filename session")], {
+    fileName: `rollout-2026-06-03T00-00-00-${threadId}.jsonl`,
+  });
+
+  const retryArgs = retryArgsAfterRateLimit(["resume", "--last"], accountHome, {
+    minMtimeMs: Date.now() - 1000,
+  });
+
+  assert.deepEqual(
+    retryArgs,
+    ["resume", threadId, retryArgs.at(-1)],
+    "interactive retries use the rollout filename session id when session_meta is unavailable",
   );
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 

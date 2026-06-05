@@ -83,6 +83,16 @@ function writeQueuedFollowupUsageLimitedSession() {
     JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-e2e', last_agent_message: null } })
   ].join('\\n') + '\\n');
 }
+function writeNoIdUsageLimitedSession() {
+  const dir = path.join(home, 'sessions', '2026', '06', '04');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'rollout-no-session-id.jsonl'), [
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-e2e' } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'find similar bugs' }] } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'token_count', rate_limits: { credits: { has_credits: false }, rate_limit_reached_type: null } } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-e2e', last_agent_message: null } })
+  ].join('\\n') + '\\n');
+}
 function writeLog(line) {
   const dir = logDir();
   if (!dir) return;
@@ -162,6 +172,8 @@ if (args[0] === 'app-server') {
       writeUsageLimitedCompleteSession();
     } else if (process.env.FAKE_LIMIT_SESSION === 'queued-follow-up') {
       writeQueuedFollowupUsageLimitedSession();
+    } else if (process.env.FAKE_LIMIT_SESSION === 'no-id-usage-complete') {
+      writeNoIdUsageLimitedSession();
     } else {
       writeIncompleteSession();
     }
@@ -418,6 +430,22 @@ function runVirtualE2e() {
     runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)),
     "queued follow-up usage-limit retries must explicitly send the continuation prompt",
   );
+
+  clearRecords();
+  ok("cxa", ["resume", "--last"], {
+    FAKE_LIMIT_ACCOUNT: ".codex-account1",
+    FAKE_LIMIT_LOG: "out-of-credits",
+    FAKE_LIMIT_SESSION: "no-id-usage-complete",
+  });
+  runs = readRecords().filter((entry) => entry.type === "run");
+  assert.equal(runs.length, 2, JSON.stringify(runs));
+  assert.equal(path.basename(runs[1].home), ".codex-account3");
+  assert.deepEqual(
+    runs[1].args.slice(runs[1].args.findIndex((arg) => arg === "exec"), -1),
+    ["exec", "resume", "--last"],
+    "no-id interactive retries must use exec resume so Continue is not parsed as a session id",
+  );
+  assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
 
   const unsharedOne = path.join(root, "unshared-account1");
   const unsharedTwo = path.join(root, "unshared-account2");

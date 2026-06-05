@@ -1117,6 +1117,13 @@ function readSessionMeta(file) {
   }
 }
 
+function sessionIdFromFileName(file) {
+  const match = path
+    .basename(file || "")
+    .match(/(?:^|-)rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i);
+  return match?.[1] || null;
+}
+
 function tokenCountHasUsageLimit(payload) {
   const rateLimits = payload?.rate_limits;
   if (!rateLimits) {
@@ -1140,7 +1147,7 @@ function latestSessionTurnState(accountHome, options = {}) {
 
   const state = {
     file,
-    sessionId: meta.id || null,
+    sessionId: meta.id || sessionIdFromFileName(file) || null,
     cwd: meta.cwd || null,
     activeTurn: false,
     sawUser: false,
@@ -1320,6 +1327,11 @@ function execResumeArgsFromInteractiveAnalysis(analysis, prompt) {
   ];
 }
 
+function interactiveResumePromptNeedsExecFallback(analysis, prompt) {
+  const targetArgs = analysis.resumeTargetArgs || ["--last"];
+  return Boolean(prompt && analysis.mode === "interactive" && targetArgs[0] === "--last");
+}
+
 function cwdFromGlobalArgs(globalArgs) {
   let cwd = process.cwd();
   for (let index = 0; index < globalArgs.length; index += 1) {
@@ -1404,7 +1416,10 @@ function retryPlanAfterRateLimit(previousArgs, accountHome, options = {}) {
   let prompt = null;
   if (sessionState.incomplete) {
     prompt = continuationPrompt;
-    if (retryAnalysis.mode === "interactive" && process.env.CX_INTERACTIVE_AUTO_EXEC === "1") {
+    if (
+      retryAnalysis.mode === "interactive" &&
+      (process.env.CX_INTERACTIVE_AUTO_EXEC === "1" || interactiveResumePromptNeedsExecFallback(retryAnalysis, prompt))
+    ) {
       return { args: execResumeArgsFromInteractiveAnalysis(retryAnalysis, prompt), session: retrySession };
     }
   } else if (!sessionState.completed && analysis.prompt) {

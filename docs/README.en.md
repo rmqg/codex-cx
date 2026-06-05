@@ -190,6 +190,8 @@ codex exec resume <interrupted-session-id> "Continue the interrupted task ..."
 
 If the last turn in the current session completed normally and produced assistant output, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, or Codex wrote `task_complete` for an out-of-credits turn with an empty `last_agent_message`, `cx` resumes it through `codex resume <interrupted-session-id> "Continue ..."` so the next account opens the TUI and submits a continuation prompt for that pending instruction. Even if the same turn already had earlier assistant output, an out-of-credits completion with no final `last_agent_message` is treated as unfinished. When the session file has an id, `cx` targets the exact interrupted session instead of relying on the next account's own `--last`.
 
+If `cx` cannot find an exact session id, it does not build `codex resume --last "Continue ..."`, because Codex CLI parses that `Continue ...` text as a session id. In that case it falls back to `codex exec resume --last "Continue ..."` so the continuation prompt is actually sent.
+
 For `cx exec ...`, retries use `codex exec resume <interrupted-session-id> "Continue ..."` so non-interactive sessions keep their mode and can explicitly continue the pending instruction. If the original command was `cx exec resume <session-id>`, the retry keeps that explicit session id instead of switching to `--last`.
 
 For `cx resume ...`, `cxr`, and `cx exec resume ...`, `cx` checks the target session for a paused, usage-limited, or blocked goal before launching Codex. If one exists, it uses Codex app-server to mark the goal active, then continues with the original command; if there is no goal or the goal is complete, the existing resume behavior is unchanged.
@@ -239,6 +241,7 @@ By default, interrupted interactive turns continue through TUI `codex resume <se
 - Probe errors like `failed to fetch codex rate limits`: increase `CX_LIMIT_TIMEOUT_MS` or `CX_LIMIT_RETRIES` if the network is temporarily slow.
 - `cx status` does not show active accounts: active detection reads `/proc`, so it is Linux-focused.
 - Auto-switch stops at the directory trust prompt: confirm the installed `cx` is current. Current versions inject trust for the work root by default; if `CX_NO_TRUST=1` or `--no-trust` is set, unset it or trust the directory manually.
+- Auto-switch reports `No saved session found with ID Continue...`: an older version built the invalid command `codex resume --last "Continue ..."`. Update to the current version; it uses `codex resume <id> "Continue ..."` when an exact id is available, and falls back to `codex exec resume --last "Continue ..."` when no id can be found.
 - Auto-switch resumes the wrong conversation: confirm the installed `cx` is current. Current versions target the exact interrupted session id first and copy that one session file when `sessions` is not shared. If it still happens, run `cx-setup --migrate` or `cx-setup --full --migrate` so all account homes share `sessions`.
 - Existing files block setup: rerun with `--migrate` to copy and back up, or `--force` to back up without copying.
 - Setup refuses active homes: exit running Codex sessions, then rerun `cx-setup`.

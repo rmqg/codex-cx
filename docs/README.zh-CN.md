@@ -190,6 +190,8 @@ codex exec resume <interrupted-session-id> "Continue the interrupted task ..."
 
 如果上一轮已经正常完成并产生了 assistant 输出，`cx` 只恢复会话。如果交互式 `cx` 或 `cxr` 的新指令已经写入 session，但这一轮还没完成，或者 Codex 因额度耗尽写出了 `task_complete` 但 `last_agent_message` 为空，`cx` 会通过 `codex resume <interrupted-session-id> "Continue ..."` 让下一个账号打开 TUI，并自动提交继续执行这条未完成指令的 prompt。即使同一个 turn 里较早已经有过 assistant 输出，只要额度耗尽时没有最终 `last_agent_message`，也会按未完成处理。只要 session 文件里有 id，`cx` 会恢复刚刚中断的精确 session，而不是依赖下一个账号自己的 `--last`。
 
+如果 `cx` 找不到精确 session id，它不会生成 `codex resume --last "Continue ..."`，因为 Codex CLI 会把这条 `Continue ...` 当作 session id 解析；此时会降级为 `codex exec resume --last "Continue ..."`，确保继续 prompt 能被发送。
+
 对 `cx exec ...`，重试会走 `codex exec resume <interrupted-session-id> "Continue ..."`，保持非交互模式，并显式继续未完成的用户指令。如果原始命令是 `cx exec resume <session-id>`，重试会保留这个显式 session id，而不是改成 `--last`。
 
 对 `cx resume ...`、`cxr` 和 `cx exec resume ...`，`cx` 会在启动 Codex 前检查目标 session 是否有 paused、usage-limited 或 blocked goal。如果有，它会通过 Codex app-server 把该 goal 恢复为 active，然后再按原命令继续；如果没有 goal 或 goal 已完成，则保持现有恢复逻辑不变。
@@ -239,6 +241,7 @@ CX_INTERACTIVE_AUTO_EXEC=1
 - `failed to fetch codex rate limits` 这类探测错误：如果只是临时网络慢，可以调高 `CX_LIMIT_TIMEOUT_MS` 或 `CX_LIMIT_RETRIES`。
 - `cx status` 不显示 active：active 检测依赖 Linux `/proc`。
 - 自动切号后停在目录信任提示：确认正在使用新版 `cx`；新版默认会注入当前工作根的 trust 配置。如果你设置了 `CX_NO_TRUST=1` 或 `--no-trust`，需要取消它或手动信任目录。
+- 自动切号后报 `No saved session found with ID Continue...`：这是旧版生成了非法的 `codex resume --last "Continue ..."`。更新到新版；新版有精确 session id 时会用 `codex resume <id> "Continue ..."`，没有 id 时会降级到 `codex exec resume --last "Continue ..."`。
 - 自动切号后 resume 到错误会话：确认正在使用新版 `cx`；新版会优先恢复刚刚中断的精确 session id，并在未共享 `sessions` 时复制这一条 session 文件。仍有问题时运行 `cx-setup --migrate` 或 `cx-setup --full --migrate`，确保所有账号共享 `sessions`。
 - setup 被已有文件拦住：用 `--migrate` 复制并备份，或用 `--force` 只备份不复制。
 - setup 拒绝 active 目录：先退出正在运行的 Codex 会话，再重新运行 `cx-setup`。
