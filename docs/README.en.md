@@ -27,7 +27,7 @@ cx-setup --accounts <N> --migrate
 Create an OpenAI API key or OpenAI-compatible API account:
 
 ```sh
-printf '%s' "$OPENAI_API_KEY" | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --migrate
+printf '%s' "$OPENAI_API_KEY" | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
 ```
 
 Use `--full` if you also want logs, state, goals, memories sqlite files, and generated images linked:
@@ -66,7 +66,7 @@ cx --no-trust [codex args...]
 cxa [codex args...]
 cxr [extra resume args...]
 cx-setup [options]
-cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --migrate
+cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
 cx-setup --remove free
 cx-setup --accounts 2 --prune --migrate
 ```
@@ -135,9 +135,9 @@ Account names and account home paths must be unique. An account home must not be
 Prefer reading keys from an environment variable or stdin so the key is not left in shell history:
 
 ```sh
-OPENAI_API_KEY=sk-... cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://ai2.hhhh.cc/v1 --model gpt-5.5 --migrate
+OPENAI_API_KEY=sk-... cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://ai2.hhhl.cc/v1 --model gpt-5.5 --api-key-check --migrate
 
-printf '%s' 'sk-...' | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://ai2.hhhh.cc/v1 --model gpt-5.5 --migrate
+printf '%s' 'sk-...' | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://ai2.hhhl.cc/v1 --model gpt-5.5 --api-key-check --migrate
 ```
 
 The command writes `auth.json` under that account home:
@@ -150,6 +150,8 @@ The command writes `auth.json` under that account home:
 ```
 
 It also writes `cli_auth_credentials_store = "file"` and `forced_login_method = "api"` to that account's `config.toml`, plus `model` and `openai_base_url` when supplied. If `auth.json` already exists, setup refuses to replace it unless you pass `--force`.
+
+`--openai-base-url` is normalized to an http(s) URL without a trailing `/`. Add `--api-key-check` to validate the endpoint before `auth.json` is written. The default `auto` mode calls `<openai_base_url>/models` first, then calls `<openai_base_url>/responses` when `--model` is also supplied. You can also use `--api-key-check=models`, `--api-key-check=responses`, or `--api-key-check=chat` explicitly. Use `--api-key-check-timeout-ms <MS>` to change the timeout. Failed checks do not write API-key credentials.
 
 API-key accounts do not use the ChatGPT account rate-limit probe. Auto mode treats them as usable, but their selection order is controlled by the API-key mode:
 
@@ -221,7 +223,7 @@ cx-setup --accounts <N> --migrate
 cx-setup --accounts <N> --full --migrate
 cx-setup --accounts <N> --home ~/.codex-shared --prefix ~/.codex-account --full --migrate
 cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
-cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --migrate
+cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
 cx-setup --accounts 2 --prune --migrate
 cx-setup --remove free
 ```
@@ -320,6 +322,7 @@ By default, interrupted interactive turns continue through TUI `codex resume <se
 - Setup reports duplicate account names/homes: fix `--homes` or `CX_ACCOUNT_HOMES` so every account has a unique name and unique `CODEX_HOME`.
 - Setup reports `Account home must not be the shared home`: use separate directories, for example `~/.codex` for shared state and `~/.codex-account1` for the first account.
 - Old accounts still appear after reducing `--accounts <N>`: the old directories are still discoverable. Run `cx-setup --accounts <N> --prune --migrate` or `cx-setup --remove <selector>`.
+- API-key checking fails: confirm `--openai-base-url` points exactly at the OpenAI-compatible API root, usually ending in `/v1`; `--api-key-check` surfaces HTML, 404, TLS, empty model-list, and missing `/responses` problems before the account is written.
 - API-key accounts are not selected first: the default is `fallback`; use `CX_API_KEY_MODE=prefer cxa` for a one-off run, or `cx-setup --api-key-mode prefer` to persist the local default.
 
 ## License

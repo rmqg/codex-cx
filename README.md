@@ -23,7 +23,7 @@ cx --no-trust [codex args...]
 cxa [codex args...]
 cxr [extra resume args...]
 cx-setup [options]
-cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --migrate
+cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
 cx-setup --remove free
 cx-setup --accounts 2 --prune --migrate
 ```

@@ -5,7 +5,14 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { normalizeApiKeyMode, parseArgs, parseHomes } = require("../bin/cx-setup");
+const {
+  checkApiKeyEndpoint,
+  normalizeApiKeyCheckMode,
+  normalizeApiKeyMode,
+  normalizeOpenAiBaseUrl,
+  parseArgs,
+  parseHomes,
+} = require("../bin/cx-setup");
 
 function cleanEnv(extra = {}) {
   const env = { ...process.env };
@@ -62,28 +69,40 @@ function cleanEnv(extra = {}) {
     "--api-key-env",
     "FREE_KEY",
     "--openai-base-url",
-    "https://ai2.hhhh.cc/v1",
+    "https://ai2.hhhl.cc/v1/",
     "--model",
     "gpt-5.5",
+    "--api-key-check",
+    "--api-key-check-timeout-ms",
+    "1234",
     "--api-key-mode",
     "api-key-first",
   ]);
 
   assert.equal(options.addApiKey, "free");
   assert.equal(options.apiKeyEnv, "FREE_KEY");
-  assert.equal(options.openaiBaseUrl, "https://ai2.hhhh.cc/v1");
+  assert.equal(options.openaiBaseUrl, "https://ai2.hhhl.cc/v1");
   assert.equal(options.model, "gpt-5.5");
+  assert.equal(options.apiKeyCheck, "auto");
+  assert.equal(options.apiKeyCheckTimeoutMs, 1234);
   assert.equal(options.apiKeyMode, "prefer");
 }
 
 {
   assert.equal(normalizeApiKeyMode("prefer"), "prefer");
   assert.equal(normalizeApiKeyMode("after-limit"), "fallback");
+  assert.equal(normalizeApiKeyCheckMode("chat-completions"), "chat");
+  assert.equal(normalizeOpenAiBaseUrl("https://proxy.example.com/v1/"), "https://proxy.example.com/v1");
 }
 
 assert.throws(() => parseArgs(["--accounts", "0"]), /positive integer/);
 assert.throws(() => parseArgs(["--homes", ",,,"]), /at least one/);
 assert.throws(() => parseArgs(["--homes", "work="]), /include a path/);
+assert.throws(() => parseArgs(["--api-key-check"]), /requires --add-api-key/);
+assert.throws(
+  () => parseArgs(["--add-api-key", "free", "--api-key", "sk-test", "--openai-base-url", "ftp://example.com/v1"]),
+  /must use http or https/,
+);
 
 {
   const setup = path.resolve(__dirname, "../bin/cx-setup");
@@ -112,7 +131,7 @@ assert.throws(() => parseArgs(["--homes", "work="]), /include a path/);
       "--api-key-env",
       "FREE_CODEX_KEY",
       "--openai-base-url",
-      "https://ai2.hhhh.cc/v1",
+      "https://ai2.hhhl.cc/v1",
       "--model",
       "gpt-5.5",
       "--api-key-mode",
@@ -132,7 +151,7 @@ assert.throws(() => parseArgs(["--homes", "work="]), /include a path/);
     `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-free" }, null, 2)}\n`,
   );
   const config = fs.readFileSync(path.join(accountHome, "config.toml"), "utf8");
-  assert.match(config, /openai_base_url = "https:\/\/ai2\.hhhh\.cc\/v1"/);
+  assert.match(config, /openai_base_url = "https:\/\/ai2\.hhhl\.cc\/v1"/);
   assert.match(config, /model = "gpt-5\.5"/);
   assert.equal(
     JSON.parse(fs.readFileSync(path.join(configHome, "codex-cx", "config.json"), "utf8")).apiKeyMode,
@@ -272,3 +291,65 @@ assert.throws(() => parseArgs(["--homes", "work="]), /include a path/);
   assert.equal(fs.lstatSync(path.join(accountOne, "auth.json")).isSymbolicLink(), false);
   fs.rmSync(tempHome, { recursive: true, force: true });
 }
+
+(async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  try {
+    console.log = () => {};
+    const calls = [];
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url, method: init.method, body: init.body });
+      if (String(url).endsWith("/models")) {
+        return new Response(JSON.stringify({ object: "list", data: [{ id: "gpt-5.5" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (String(url).endsWith("/responses")) {
+        return new Response(JSON.stringify({ id: "resp-test", model: "gpt-5.5", output_text: "ping" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    await checkApiKeyEndpoint("sk-test", {
+      apiKeyCheck: "auto",
+      apiKeyCheckTimeoutMs: 1000,
+      openaiBaseUrl: "https://proxy.example.com/v1",
+      model: "gpt-5.5",
+    });
+
+    assert.deepEqual(
+      calls.map((call) => [call.method, call.url]),
+      [
+        ["GET", "https://proxy.example.com/v1/models"],
+        ["POST", "https://proxy.example.com/v1/responses"],
+      ],
+    );
+    assert.match(calls[1].body, /gpt-5\.5/);
+
+    globalThis.fetch = async () =>
+      new Response("<html>missing</html>", {
+        status: 404,
+        headers: { "content-type": "text/html" },
+      });
+    await assert.rejects(
+      () =>
+        checkApiKeyEndpoint("sk-test", {
+          apiKeyCheck: "models",
+          apiKeyCheckTimeoutMs: 1000,
+          openaiBaseUrl: "https://bad.example.com/v1",
+        }),
+      /HTTP 404/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

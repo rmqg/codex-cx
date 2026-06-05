@@ -34,6 +34,8 @@ const fullSharedItems = [
   "state_5.sqlite-wal",
 ];
 const apiKeyModes = new Set(["prefer", "fallback"]);
+const apiKeyCheckModes = new Set(["auto", "models", "responses", "chat"]);
+const defaultApiKeyCheckTimeoutMs = 15000;
 
 function usage() {
   console.log(`Usage:
@@ -49,6 +51,11 @@ Options:
   --api-key-stdin       Read the API key for --add-api-key from stdin.
   --openai-base-url URL Write openai_base_url for the API-key account.
   --model MODEL         Write the default model for the API-key account.
+  --api-key-check[=MODE]
+                        Validate the OpenAI-compatible endpoint before writing auth.json.
+                        MODE: auto, models, responses, or chat. Default: auto.
+  --api-key-check-timeout-ms MS
+                        Timeout for --api-key-check. Default: ${defaultApiKeyCheckTimeoutMs}.
   --remove SELECTOR     Move a discovered/configured account home to a backup.
   --prune               With --accounts/--homes, move extra discovered homes to backups.
   --api-key-mode MODE   Persist local auto-selection mode: prefer or fallback.
@@ -64,7 +71,7 @@ This never links auth.json. Log in once per account with:
   CODEX_HOME=~/.codex-accountN codex login
 
 API-key example:
-  printf '%s' "$OPENAI_API_KEY" | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --migrate`);
+  printf '%s' "$OPENAI_API_KEY" | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate`);
 }
 
 function parseArgs(argv) {
@@ -85,6 +92,8 @@ function parseArgs(argv) {
     apiKeyStdin: false,
     openaiBaseUrl: null,
     model: null,
+    apiKeyCheck: null,
+    apiKeyCheckTimeoutMs: defaultApiKeyCheckTimeoutMs,
     remove: [],
     prune: false,
     apiKeyMode: null,
@@ -118,6 +127,22 @@ function parseArgs(argv) {
     }
     if (arg === "--api-key-stdin") {
       options.apiKeyStdin = true;
+      continue;
+    }
+    if (arg === "--api-key-check" || arg === "--check-api-key" || arg === "--validate-api-key") {
+      options.apiKeyCheck = "auto";
+      continue;
+    }
+    if (arg.startsWith("--api-key-check=")) {
+      options.apiKeyCheck = normalizeApiKeyCheckMode(arg.slice("--api-key-check=".length), "--api-key-check");
+      continue;
+    }
+    if (arg.startsWith("--check-api-key=")) {
+      options.apiKeyCheck = normalizeApiKeyCheckMode(arg.slice("--check-api-key=".length), "--check-api-key");
+      continue;
+    }
+    if (arg.startsWith("--validate-api-key=")) {
+      options.apiKeyCheck = normalizeApiKeyCheckMode(arg.slice("--validate-api-key=".length), "--validate-api-key");
       continue;
     }
     if (arg === "--prune") {
@@ -173,15 +198,15 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--openai-base-url" || arg === "--base-url") {
-      options.openaiBaseUrl = requiredValue(argv, ++i, arg);
+      options.openaiBaseUrl = normalizeOpenAiBaseUrl(requiredValue(argv, ++i, arg), arg);
       continue;
     }
     if (arg.startsWith("--openai-base-url=")) {
-      options.openaiBaseUrl = arg.slice("--openai-base-url=".length);
+      options.openaiBaseUrl = normalizeOpenAiBaseUrl(arg.slice("--openai-base-url=".length), "--openai-base-url");
       continue;
     }
     if (arg.startsWith("--base-url=")) {
-      options.openaiBaseUrl = arg.slice("--base-url=".length);
+      options.openaiBaseUrl = normalizeOpenAiBaseUrl(arg.slice("--base-url=".length), "--base-url");
       continue;
     }
     if (arg === "--model") {
@@ -190,6 +215,29 @@ function parseArgs(argv) {
     }
     if (arg.startsWith("--model=")) {
       options.model = arg.slice("--model=".length);
+      continue;
+    }
+    if (arg === "--api-key-check-mode") {
+      options.apiKeyCheck = normalizeApiKeyCheckMode(requiredValue(argv, ++i, arg), arg);
+      continue;
+    }
+    if (arg.startsWith("--api-key-check-mode=")) {
+      options.apiKeyCheck = normalizeApiKeyCheckMode(arg.slice("--api-key-check-mode=".length), "--api-key-check-mode");
+      continue;
+    }
+    if (arg === "--api-key-check-timeout-ms" || arg === "--api-key-timeout-ms") {
+      options.apiKeyCheckTimeoutMs = parsePositiveInteger(requiredValue(argv, ++i, arg), arg);
+      continue;
+    }
+    if (arg.startsWith("--api-key-check-timeout-ms=")) {
+      options.apiKeyCheckTimeoutMs = parsePositiveInteger(
+        arg.slice("--api-key-check-timeout-ms=".length),
+        "--api-key-check-timeout-ms",
+      );
+      continue;
+    }
+    if (arg.startsWith("--api-key-timeout-ms=")) {
+      options.apiKeyCheckTimeoutMs = parsePositiveInteger(arg.slice("--api-key-timeout-ms=".length), "--api-key-timeout-ms");
       continue;
     }
     if (arg === "--remove") {
@@ -227,6 +275,10 @@ function parseArgs(argv) {
     throw new Error(`Unknown option: ${arg}`);
   }
 
+  if (options.apiKeyCheck && !options.addApiKey) {
+    throw new Error("--api-key-check requires --add-api-key");
+  }
+
   return options;
 }
 
@@ -258,6 +310,32 @@ function parseAccountName(value, label) {
     throw new Error(`${label} account name must not be ${name}`);
   }
   return name;
+}
+
+function normalizeOpenAiBaseUrl(value, label = "--openai-base-url") {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    throw new Error(`${label} requires a non-empty URL`);
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`${label} must be a valid http(s) URL`);
+  }
+
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`${label} must use http or https`);
+  }
+  if (!parsed.hostname) {
+    throw new Error(`${label} must include a host`);
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error(`${label} must not include query parameters or a fragment`);
+  }
+
+  return parsed.toString().replace(/\/+$/, "");
 }
 
 function expandHomePath(value) {
@@ -487,6 +565,26 @@ function normalizeApiKeyMode(value, label = "api key mode") {
   throw new Error(`${label} must be prefer or fallback`);
 }
 
+function normalizeApiKeyCheckMode(value, label = "--api-key-check") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/_/g, "-");
+  if (["", "1", "true", "yes", "auto"].includes(normalized)) {
+    return "auto";
+  }
+  if (["model", "models", "list", "list-models"].includes(normalized)) {
+    return "models";
+  }
+  if (["response", "responses", "responses-api"].includes(normalized)) {
+    return "responses";
+  }
+  if (["chat", "chat-completions", "completions"].includes(normalized)) {
+    return "chat";
+  }
+  if (!apiKeyCheckModes.has(normalized)) {
+    throw new Error(`${label} must be auto, models, responses, or chat`);
+  }
+  return normalized;
+}
+
 function ensureDir(dir, options) {
   if (options.dryRun) {
     console.log(`[dry-run] mkdir -p ${dir}`);
@@ -572,17 +670,193 @@ function selectorMatches(account, selector, accounts) {
 }
 
 function readApiKey(options) {
+  if (Object.prototype.hasOwnProperty.call(options, "_apiKeyValue")) {
+    return options._apiKeyValue;
+  }
+
   const sources = [options.apiKey !== null, Boolean(options.apiKeyEnv), options.apiKeyStdin].filter(Boolean).length;
   if (sources !== 1) {
     throw new Error("--add-api-key requires exactly one of --api-key, --api-key-env, or --api-key-stdin");
   }
+  let value;
   if (options.apiKey !== null) {
-    return String(options.apiKey).trim();
+    value = String(options.apiKey).trim();
+  } else if (options.apiKeyEnv) {
+    value = String(process.env[options.apiKeyEnv] || "").trim();
+  } else {
+    value = fs.readFileSync(0, "utf8").trim();
   }
-  if (options.apiKeyEnv) {
-    return String(process.env[options.apiKeyEnv] || "").trim();
+  options._apiKeyValue = value;
+  return value;
+}
+
+function apiKeyCheckUrl(baseUrl, suffix) {
+  return `${normalizeOpenAiBaseUrl(baseUrl)}${suffix}`;
+}
+
+function responseTextSnippet(text) {
+  const trimmed = String(text || "").replace(/\s+/g, " ").trim();
+  return trimmed.length > 240 ? `${trimmed.slice(0, 240)}...` : trimmed;
+}
+
+function extractResponseText(payload) {
+  if (typeof payload?.output_text === "string") {
+    return payload.output_text;
   }
-  return fs.readFileSync(0, "utf8").trim();
+  const output = Array.isArray(payload?.output) ? payload.output : [];
+  return output
+    .flatMap((item) => (Array.isArray(item?.content) ? item.content : []))
+    .map((item) => item?.text || "")
+    .join("");
+}
+
+async function readJsonResponse(response, label) {
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    // Keep the text snippet for the error message below.
+  }
+
+  if (!response.ok) {
+    const message = payload?.error?.message || payload?.message || responseTextSnippet(text);
+    throw new Error(`${label} returned HTTP ${response.status}${message ? `: ${message}` : ""}`);
+  }
+  if (!payload || typeof payload !== "object") {
+    throw new Error(`${label} returned non-JSON response${text ? `: ${responseTextSnippet(text)}` : ""}`);
+  }
+  if (payload.error) {
+    const message = payload.error.message || payload.message || responseTextSnippet(JSON.stringify(payload.error));
+    throw new Error(`${label} returned error${message ? `: ${message}` : ""}`);
+  }
+  return payload;
+}
+
+async function fetchJson(url, init, options) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.apiKeyCheckTimeoutMs);
+  const label = `${init.method || "GET"} ${url}`;
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    return await readJsonResponse(response, label);
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`${label} timed out after ${options.apiKeyCheckTimeoutMs}ms`);
+    }
+    if (error?.message?.startsWith(label)) {
+      throw error;
+    }
+    const reason = error?.cause?.message || error?.message || String(error);
+    throw new Error(`${label} failed: ${reason}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function apiKeyCheckHeaders(apiKey, extra = {}) {
+  return {
+    authorization: `Bearer ${apiKey}`,
+    ...extra,
+  };
+}
+
+async function checkApiKeyModels(apiKey, options) {
+  const url = apiKeyCheckUrl(options.openaiBaseUrl, "/models");
+  const payload = await fetchJson(url, { method: "GET", headers: apiKeyCheckHeaders(apiKey) }, options);
+  if (!Array.isArray(payload.data)) {
+    throw new Error(`GET ${url} did not return a model list`);
+  }
+  return { mode: "models", count: payload.data.length };
+}
+
+async function checkApiKeyResponses(apiKey, options) {
+  if (!options.model) {
+    throw new Error("--api-key-check=responses requires --model");
+  }
+  const url = apiKeyCheckUrl(options.openaiBaseUrl, "/responses");
+  const payload = await fetchJson(
+    url,
+    {
+      method: "POST",
+      headers: apiKeyCheckHeaders(apiKey, { "content-type": "application/json" }),
+      body: JSON.stringify({
+        model: options.model,
+        input: "Reply exactly: ping",
+        max_output_tokens: 16,
+      }),
+    },
+    options,
+  );
+  const text = extractResponseText(payload);
+  return { mode: "responses", model: payload.model || options.model, text };
+}
+
+async function checkApiKeyChat(apiKey, options) {
+  if (!options.model) {
+    throw new Error("--api-key-check=chat requires --model");
+  }
+  const url = apiKeyCheckUrl(options.openaiBaseUrl, "/chat/completions");
+  const payload = await fetchJson(
+    url,
+    {
+      method: "POST",
+      headers: apiKeyCheckHeaders(apiKey, { "content-type": "application/json" }),
+      body: JSON.stringify({
+        model: options.model,
+        messages: [{ role: "user", content: "Reply exactly: ping" }],
+        max_tokens: 16,
+      }),
+    },
+    options,
+  );
+  return { mode: "chat", model: payload.model || options.model, text: payload.choices?.[0]?.message?.content || "" };
+}
+
+async function checkApiKeyEndpoint(apiKey, options) {
+  if (!options.apiKeyCheck) {
+    return;
+  }
+  if (!options.openaiBaseUrl) {
+    throw new Error("--api-key-check requires --openai-base-url");
+  }
+  if (options.dryRun) {
+    console.log(`[dry-run] check API key endpoint ${options.openaiBaseUrl} (${options.apiKeyCheck})`);
+    return;
+  }
+
+  const models = await checkApiKeyModels(apiKey, options);
+  if (options.apiKeyCheck === "models" || (options.apiKeyCheck === "auto" && !options.model)) {
+    console.log(`checked API-key endpoint: ${options.openaiBaseUrl} returned ${models.count} models`);
+    return;
+  }
+
+  const result =
+    options.apiKeyCheck === "chat"
+      ? await checkApiKeyChat(apiKey, options)
+      : await checkApiKeyResponses(apiKey, options);
+  const reply = result.text ? `, reply ${JSON.stringify(responseTextSnippet(result.text))}` : "";
+  console.log(`checked API-key endpoint: ${result.mode} ok for ${result.model}${reply}`);
+}
+
+async function preflightApiKeyAccount(account, options) {
+  if (options._apiKeyPreflight) {
+    return;
+  }
+
+  const apiKey = readApiKey(options);
+  if (!apiKey) {
+    throw new Error("API key is empty");
+  }
+
+  const authPath = path.join(account.home, "auth.json");
+  const existingAuth = fs.lstatSync(authPath, { throwIfNoEntry: false });
+  if (existingAuth && !options.force) {
+    throw new Error(`${authPath} exists; use --force to replace it`);
+  }
+
+  await checkApiKeyEndpoint(apiKey, options);
+  options._apiKeyPreflight = true;
 }
 
 function tomlString(value) {
@@ -625,17 +899,11 @@ function upsertTopLevelTomlStrings(file, values, options) {
   fs.writeFileSync(file, `${lines.join("\n")}\n`, { mode: 0o600 });
 }
 
-function writeApiKeyAccount(account, options) {
+async function writeApiKeyAccount(account, options) {
+  await preflightApiKeyAccount(account, options);
   const apiKey = readApiKey(options);
-  if (!apiKey) {
-    throw new Error("API key is empty");
-  }
 
   const authPath = path.join(account.home, "auth.json");
-  const existingAuth = fs.lstatSync(authPath, { throwIfNoEntry: false });
-  if (existingAuth && !options.force) {
-    throw new Error(`${authPath} exists; use --force to replace it`);
-  }
 
   const configValues = {
     cli_auth_credentials_store: "file",
@@ -700,7 +968,7 @@ function linkItem(accountHome, sharedHome, item, options) {
   }
 }
 
-function setup(options) {
+async function setup(options) {
   const items = options.full ? fullSharedItems : defaultSharedItems;
   const sharedHome = path.resolve(options.sharedHome);
   const shouldConfigureHomes =
@@ -714,6 +982,7 @@ function setup(options) {
   const removableAccounts = validateAccounts(discoverAccountHomes(), sharedHome);
   const activeHomes = activeCodexHomes();
   const removeTargets = [];
+  let apiKeyAccount = null;
 
   if (options.apiKeyMode) {
     writeLocalConfigPatch({ apiKeyMode: options.apiKeyMode }, options);
@@ -760,8 +1029,16 @@ function setup(options) {
   if (activeTargets.length > 0 && !options.allowActive && !options.dryRun) {
     throw new Error(
       `Refusing to modify active Codex homes: ${activeTargets.map((account) => account.home).join(", ")}. ` +
-        "Exit those Codex sessions first, or rerun with --allow-active if you accept the risk.",
+      "Exit those Codex sessions first, or rerun with --allow-active if you accept the risk.",
     );
+  }
+
+  if (options.addApiKey) {
+    apiKeyAccount = homes.find((candidate) => candidate.name.toLowerCase() === options.addApiKey.toLowerCase());
+    if (!apiKeyAccount) {
+      throw new Error(`API-key account was not selected: ${options.addApiKey}`);
+    }
+    await preflightApiKeyAccount(apiKeyAccount, options);
   }
 
   ensureDir(sharedHome, options);
@@ -775,11 +1052,7 @@ function setup(options) {
   }
 
   if (options.addApiKey) {
-    const account = homes.find((candidate) => candidate.name.toLowerCase() === options.addApiKey.toLowerCase());
-    if (!account) {
-      throw new Error(`API-key account was not selected: ${options.addApiKey}`);
-    }
-    writeApiKeyAccount(account, options);
+    await writeApiKeyAccount(apiKeyAccount, options);
   }
 
   console.log("\nNext steps:");
@@ -789,20 +1062,27 @@ function setup(options) {
   console.log("  cx status");
 }
 
-if (require.main === module) {
+async function main() {
   try {
-    setup(parseArgs(process.argv.slice(2)));
+    await setup(parseArgs(process.argv.slice(2)));
   } catch (error) {
     console.error(`[cx-setup] ${error.message}`);
     process.exit(2);
   }
 }
 
+if (require.main === module) {
+  main();
+}
+
 module.exports = {
+  checkApiKeyEndpoint,
   defaultSharedItems,
   discoverAccountHomes,
   fullSharedItems,
+  normalizeApiKeyCheckMode,
   normalizeApiKeyMode,
+  normalizeOpenAiBaseUrl,
   parseArgs,
   parseHomes,
   setup,

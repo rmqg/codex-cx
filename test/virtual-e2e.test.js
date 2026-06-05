@@ -343,7 +343,7 @@ function runVirtualE2e() {
     "--api-key",
     "sk-free",
     "--openai-base-url",
-    "https://ai2.hhhh.cc/v1",
+    "https://ai2.hhhl.cc/v1",
     "--model",
     "gpt-5.5",
     "--migrate",
