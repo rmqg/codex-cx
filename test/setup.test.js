@@ -92,6 +92,7 @@ function cleanEnv(extra = {}) {
   assert.equal(normalizeApiKeyMode("prefer"), "prefer");
   assert.equal(normalizeApiKeyMode("after-limit"), "fallback");
   assert.equal(normalizeApiKeyCheckMode("chat-completions"), "chat");
+  assert.throws(() => normalizeApiKeyCheckMode("bad"), /auto, responses, chat, or models/);
   assert.equal(normalizeOpenAiBaseUrl("https://proxy.example.com/v1/"), "https://proxy.example.com/v1");
 }
 
@@ -301,7 +302,7 @@ assert.throws(
     globalThis.fetch = async (url, init) => {
       calls.push({ url, method: init.method, body: init.body });
       if (String(url).endsWith("/models")) {
-        return new Response(JSON.stringify({ object: "list", data: [{ id: "gpt-5.5" }] }), {
+        return new Response(JSON.stringify({ object: "chat.completion", id: "not-a-model-list" }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
@@ -324,12 +325,19 @@ assert.throws(
 
     assert.deepEqual(
       calls.map((call) => [call.method, call.url]),
-      [
-        ["GET", "https://proxy.example.com/v1/models"],
-        ["POST", "https://proxy.example.com/v1/responses"],
-      ],
+      [["POST", "https://proxy.example.com/v1/responses"]],
     );
-    assert.match(calls[1].body, /gpt-5\.5/);
+    assert.match(calls[0].body, /gpt-5\.5/);
+
+    await assert.rejects(
+      () =>
+        checkApiKeyEndpoint("sk-test", {
+          apiKeyCheck: "models",
+          apiKeyCheckTimeoutMs: 1000,
+          openaiBaseUrl: "https://proxy.example.com/v1",
+        }),
+      /did not return a model list/,
+    );
 
     globalThis.fetch = async () =>
       new Response("<html>missing</html>", {

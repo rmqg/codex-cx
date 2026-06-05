@@ -151,7 +151,7 @@ printf '%s' 'sk-...' | cx-setup --add-api-key free --api-key-stdin --openai-base
 
 同时会在该账号的 `config.toml` 写入 `cli_auth_credentials_store = "file"`、`forced_login_method = "api"`，并按参数写入 `model` 和 `openai_base_url`。如果 `auth.json` 已存在，默认会拒绝覆盖；确认要替换时加 `--force`。
 
-`--openai-base-url` 会被规范化为无尾随 `/` 的 http(s) URL。加 `--api-key-check` 后，setup 会在写入 `auth.json` 前验证接口；默认 `auto` 模式会先请求 `<openai_base_url>/models`，并在同时提供 `--model` 时再请求 `<openai_base_url>/responses`。也可以显式使用 `--api-key-check=models`、`--api-key-check=responses` 或 `--api-key-check=chat`。`--api-key-check-timeout-ms <MS>` 可以调整超时。校验失败时不会写入 API key 凭据。
+`--openai-base-url` 会被规范化为无尾随 `/` 的 http(s) URL。加 `--api-key-check` 后，setup 会在写入 `auth.json` 前验证接口；默认 `auto` 模式在同时提供 `--model` 时请求 `<openai_base_url>/responses`，没有 `--model` 时请求 `<openai_base_url>/models`。也可以显式使用 `--api-key-check=responses`、`--api-key-check=chat` 或 `--api-key-check=models`。`--api-key-check-timeout-ms <MS>` 可以调整超时。校验失败时不会写入 API key 凭据。
 
 API key 账号不会走 ChatGPT 账号额度探测。自动模式会把它视为可用账号，但选择顺序由 API key 模式控制：
 
@@ -322,7 +322,7 @@ CX_INTERACTIVE_AUTO_EXEC=1
 - setup 报重复账号名或重复 home：检查 `--homes` 或 `CX_ACCOUNT_HOMES`，确保每个账号名和每个 `CODEX_HOME` 都唯一。
 - setup 报 `Account home must not be the shared home`：账号目录和共享目录要分开，例如 `~/.codex` 做共享状态，`~/.codex-account1` 做第一个账号。
 - 改小 `--accounts <N>` 后旧账号仍会出现：旧目录还在自动发现范围内，运行 `cx-setup --accounts <N> --prune --migrate` 或 `cx-setup --remove <selector>`。
-- API key 校验失败：确认 `--openai-base-url` 必须精确到 OpenAI 兼容 API 根路径，通常以 `/v1` 结尾；`--api-key-check` 会把 HTML、404、TLS、空模型列表或 `/responses` 不可用的问题提前暴露出来。
+- API key 校验失败：确认 `--openai-base-url` 必须精确到 OpenAI 兼容 API 根路径，通常以 `/v1` 结尾；`--api-key-check` 会把 HTML、404、TLS、服务端换 key/无权限、空模型列表或 `/responses` 不可用的问题提前暴露出来。
 - API key 账号没有被优先使用：默认是 `fallback`，运行 `CX_API_KEY_MODE=prefer cxa` 临时切换，或 `cx-setup --api-key-mode prefer` 写入本机默认。
 
 ## 许可证

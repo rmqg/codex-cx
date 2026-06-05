@@ -53,7 +53,7 @@ Options:
   --model MODEL         Write the default model for the API-key account.
   --api-key-check[=MODE]
                         Validate the OpenAI-compatible endpoint before writing auth.json.
-                        MODE: auto, models, responses, or chat. Default: auto.
+                        MODE: auto, responses, chat, or models. Default: auto.
   --api-key-check-timeout-ms MS
                         Timeout for --api-key-check. Default: ${defaultApiKeyCheckTimeoutMs}.
   --remove SELECTOR     Move a discovered/configured account home to a backup.
@@ -580,7 +580,7 @@ function normalizeApiKeyCheckMode(value, label = "--api-key-check") {
     return "chat";
   }
   if (!apiKeyCheckModes.has(normalized)) {
-    throw new Error(`${label} must be auto, models, responses, or chat`);
+    throw new Error(`${label} must be auto, responses, chat, or models`);
   }
   return normalized;
 }
@@ -825,8 +825,8 @@ async function checkApiKeyEndpoint(apiKey, options) {
     return;
   }
 
-  const models = await checkApiKeyModels(apiKey, options);
   if (options.apiKeyCheck === "models" || (options.apiKeyCheck === "auto" && !options.model)) {
+    const models = await checkApiKeyModels(apiKey, options);
     console.log(`checked API-key endpoint: ${options.openaiBaseUrl} returned ${models.count} models`);
     return;
   }
