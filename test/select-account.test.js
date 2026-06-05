@@ -75,6 +75,10 @@ function writeSession(accountHome, events) {
   return file;
 }
 
+function sessionMeta(id = "019eaaaa-bbbb-7ccc-8ddd-000000000001", cwd = process.cwd()) {
+  return { type: "session_meta", payload: { id, cwd } };
+}
+
 function taskStarted() {
   return { type: "event_msg", payload: { type: "task_started", turn_id: "turn-1" } };
 }
@@ -790,6 +794,40 @@ function tokenCountWithoutCredits() {
     ["resume", "--last", retryArgs.at(-1)],
     "event_msg user_message is enough to continue an interrupted interactive turn",
   );
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  const threadId = "019eaaaa-bbbb-7ccc-8ddd-000000000123";
+  writeSession(accountHome, [sessionMeta(threadId), taskStarted(), userMessage("resume exact session")]);
+
+  const retryArgs = retryArgsAfterRateLimit(["resume", "--last"], accountHome, {
+    minMtimeMs: Date.now() - 1000,
+  });
+
+  assert.deepEqual(
+    retryArgs,
+    ["resume", threadId, retryArgs.at(-1)],
+    "usage-limited interactive retries target the interrupted session id instead of target-account --last",
+  );
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  const threadId = "019eaaaa-bbbb-7ccc-8ddd-000000000124";
+  writeSession(accountHome, [sessionMeta(threadId), taskStarted(), userMessage("resume exact exec session")]);
+
+  const retryArgs = retryArgsAfterRateLimit(["exec", "implement feature"], accountHome, {
+    minMtimeMs: Date.now() - 1000,
+  });
+
+  assert.deepEqual(retryArgs.slice(0, 3), ["exec", "resume", threadId]);
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
   fs.rmSync(accountHome, { recursive: true, force: true });

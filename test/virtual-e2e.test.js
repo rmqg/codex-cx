@@ -53,6 +53,7 @@ function writeIncompleteSession() {
   const dir = path.join(home, 'sessions', '2026', '06', '04');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'rollout-e2e.jsonl'), [
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'session_meta', payload: { id: '019eaaaa-bbbb-7ccc-8ddd-000000000001', cwd: process.cwd() } }),
     JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-e2e' } }),
     JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'implement feature' }] } })
   ].join('\\n') + '\\n');
@@ -61,6 +62,7 @@ function writeUsageLimitedCompleteSession() {
   const dir = path.join(home, 'sessions', '2026', '06', '04');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'rollout-e2e.jsonl'), [
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'session_meta', payload: { id: '019eaaaa-bbbb-7ccc-8ddd-000000000002', cwd: process.cwd() } }),
     JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-e2e' } }),
     JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'new request' }] } }),
     JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'token_count', rate_limits: { credits: { has_credits: false }, rate_limit_reached_type: null } } }),
@@ -355,7 +357,7 @@ function runVirtualE2e() {
   assert.equal(path.basename(runs[1].home), ".codex-account3");
   assert.equal(runs[1].args.includes("exec"), false);
   assert.ok(runs[1].args.includes("resume"));
-  assert.deepEqual(runs[1].args.slice(-2, -1), ["--last"]);
+  assert.ok(runs[1].args.includes("019eaaaa-bbbb-7ccc-8ddd-000000000001"));
   assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
 
   clearRecords();
@@ -368,6 +370,7 @@ function runVirtualE2e() {
   assert.equal(path.basename(runs[1].home), ".codex-account3");
   assert.ok(runs[1].args.includes("exec"));
   assert.ok(runs[1].args.includes("resume"));
+  assert.ok(runs[1].args.includes("019eaaaa-bbbb-7ccc-8ddd-000000000001"));
   assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
 
   clearRecords();
@@ -381,7 +384,34 @@ function runVirtualE2e() {
   assert.equal(path.basename(runs[1].home), ".codex-account3");
   assert.equal(runs[1].args.includes("exec"), false);
   assert.ok(runs[1].args.includes("resume"));
+  assert.ok(runs[1].args.includes("019eaaaa-bbbb-7ccc-8ddd-000000000002"));
   assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
+
+  const unsharedOne = path.join(root, "unshared-account1");
+  const unsharedTwo = path.join(root, "unshared-account2");
+  fs.mkdirSync(unsharedOne, { recursive: true });
+  fs.mkdirSync(unsharedTwo, { recursive: true });
+  fs.writeFileSync(path.join(unsharedOne, "auth.json"), "{}\n");
+  fs.writeFileSync(path.join(unsharedTwo, "auth.json"), "{}\n");
+  clearRecords();
+  ok("cxa", ["resume", "--last"], {
+    CX_ACCOUNT_HOMES: `one=${unsharedOne},two=${unsharedTwo}`,
+    FAKE_LIMITS: JSON.stringify({
+      "unshared-account1": { p: 1, s: 1, r: "" },
+      "unshared-account2": { p: 2, s: 2, r: "" },
+    }),
+    FAKE_LIMIT_ACCOUNT: "unshared-account1",
+  });
+  runs = readRecords().filter((entry) => entry.type === "run");
+  assert.equal(runs.length, 2, JSON.stringify(runs));
+  assert.equal(path.basename(runs[0].home), "unshared-account1");
+  assert.equal(path.basename(runs[1].home), "unshared-account2");
+  assert.ok(runs[1].args.includes("019eaaaa-bbbb-7ccc-8ddd-000000000001"));
+  assert.equal(
+    fs.existsSync(path.join(unsharedTwo, "sessions", "2026", "06", "04", "rollout-e2e.jsonl")),
+    true,
+    "the interrupted session should be copied into the next account home when sessions are not shared",
+  );
 
   clearRecords();
   ok("cxa", ["exec", "finish goal"], {

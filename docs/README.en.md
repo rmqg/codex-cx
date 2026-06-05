@@ -184,23 +184,23 @@ During a run, `cx` watches the Codex TUI log for usage-limit errors. It recogniz
 The retry path depends on what happened before the limit:
 
 ```sh
-codex resume --last "Continue the interrupted task ..."
-codex exec resume --last "Continue the interrupted task ..."
+codex resume <interrupted-session-id> "Continue the interrupted task ..."
+codex exec resume <interrupted-session-id> "Continue the interrupted task ..."
 ```
 
-If the last turn in the current session completed normally and produced assistant output, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, or Codex wrote `task_complete` for an out-of-credits turn with an empty `last_agent_message`, `cx` resumes it through `codex resume --last "Continue ..."` so the next account opens the TUI and submits a continuation prompt for that pending instruction.
+If the last turn in the current session completed normally and produced assistant output, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, or Codex wrote `task_complete` for an out-of-credits turn with an empty `last_agent_message`, `cx` resumes it through `codex resume <interrupted-session-id> "Continue ..."` so the next account opens the TUI and submits a continuation prompt for that pending instruction. When the session file has an id, `cx` targets the exact interrupted session instead of relying on the next account's own `--last`.
 
-For `cx exec ...`, retries use `codex exec resume --last "Continue ..."` so non-interactive sessions keep their mode and can explicitly continue the pending instruction. If the original command was `cx exec resume <session-id>`, the retry keeps that explicit session id instead of switching to `--last`.
+For `cx exec ...`, retries use `codex exec resume <interrupted-session-id> "Continue ..."` so non-interactive sessions keep their mode and can explicitly continue the pending instruction. If the original command was `cx exec resume <session-id>`, the retry keeps that explicit session id instead of switching to `--last`.
 
 For `cx resume ...`, `cxr`, and `cx exec resume ...`, `cx` checks the target session for a paused, usage-limited, or blocked goal before launching Codex. If one exists, it uses Codex app-server to mark the goal active, then continues with the original command; if there is no goal or the goal is complete, the existing resume behavior is unchanged.
 
 Set `CX_INTERACTIVE_AUTO_EXEC=1` to force the older non-interactive `codex exec resume ...` continuation path for interrupted interactive turns.
 
-If the limited process did not create a current session file, `cx` retries the original command on the next account instead of blindly resuming an unrelated older session.
+If the next account does not share the `sessions` directory, `cx` first copies only the interrupted session JSONL file into the next account home, then resumes by the exact session id. It never copies, links, or shares any `auth.json`. If the limited process did not create a current session file, `cx` retries the original command on the next account instead of blindly resuming an unrelated older session.
 
 If every candidate account is exhausted or unavailable, `cx` prints the account status and exits with an error instead of launching Codex.
 
-Auto-resume works best after `cx-setup` links the account homes to shared session directories.
+Auto-resume still works best after `cx-setup` links the account homes to shared session directories; the runtime single-session copy is a fallback to avoid resuming the target account's older `--last` conversation when sessions are not shared.
 
 ## Environment
 
@@ -229,7 +229,7 @@ By default, `cx` trusts the work root used for the launch so account switches ar
 
 By default, resume commands automatically reactivate paused, usage-limited, or blocked goals. Set `CX_AUTO_RESUME_GOAL=0` to disable this preflight.
 
-By default, interrupted interactive turns continue through TUI `codex resume --last "Continue ..."` after an automatic account switch. Set `CX_INTERACTIVE_AUTO_EXEC=1` to force non-interactive `codex exec resume ...` instead.
+By default, interrupted interactive turns continue through TUI `codex resume <session-id> "Continue ..."` after an automatic account switch. Set `CX_INTERACTIVE_AUTO_EXEC=1` to force non-interactive `codex exec resume ...` instead.
 
 ## Troubleshooting
 
@@ -239,7 +239,7 @@ By default, interrupted interactive turns continue through TUI `codex resume --l
 - Probe errors like `failed to fetch codex rate limits`: increase `CX_LIMIT_TIMEOUT_MS` or `CX_LIMIT_RETRIES` if the network is temporarily slow.
 - `cx status` does not show active accounts: active detection reads `/proc`, so it is Linux-focused.
 - Auto-switch stops at the directory trust prompt: confirm the installed `cx` is current. Current versions inject trust for the work root by default; if `CX_NO_TRUST=1` or `--no-trust` is set, unset it or trust the directory manually.
-- Auto-switch resumes the wrong conversation: run `cx-setup --migrate` or `cx-setup --full --migrate` so all account homes share `sessions`.
+- Auto-switch resumes the wrong conversation: confirm the installed `cx` is current. Current versions target the exact interrupted session id first and copy that one session file when `sessions` is not shared. If it still happens, run `cx-setup --migrate` or `cx-setup --full --migrate` so all account homes share `sessions`.
 - Existing files block setup: rerun with `--migrate` to copy and back up, or `--force` to back up without copying.
 - Setup refuses active homes: exit running Codex sessions, then rerun `cx-setup`.
 - Setup reports duplicate account names/homes: fix `--homes` or `CX_ACCOUNT_HOMES` so every account has a unique name and unique `CODEX_HOME`.

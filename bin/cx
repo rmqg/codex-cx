@@ -1136,9 +1136,12 @@ function latestSessionTurnState(accountHome, options = {}) {
   if (!file) {
     return { file: null, incomplete: false };
   }
+  const meta = readSessionMeta(file);
 
   const state = {
     file,
+    sessionId: meta.id || null,
+    cwd: meta.cwd || null,
     activeTurn: false,
     sawUser: false,
     sawAssistant: false,
@@ -1224,6 +1227,20 @@ function latestSessionTurnState(accountHome, options = {}) {
   };
 }
 
+function retryTargetFromSession(analysis, sessionState) {
+  if (!sessionState.sessionId) {
+    return analysis;
+  }
+
+  const targetArgs = analysis.resumeTargetArgs || ["--last"];
+  const currentTarget = targetArgs[0];
+  if (currentTarget && currentTarget !== "--last") {
+    return analysis;
+  }
+
+  return { ...analysis, resumeTargetArgs: [sessionState.sessionId] };
+}
+
 function resumeArgsFromAnalysis(analysis, prompt) {
   if (analysis.mode === "exec") {
     return [
@@ -1243,6 +1260,53 @@ function resumeArgsFromAnalysis(analysis, prompt) {
     ...(analysis.resumeTargetArgs || ["--last"]),
     ...(prompt ? [prompt] : []),
   ];
+}
+
+function sessionRelativePath(accountHome, file) {
+  if (!file) {
+    return null;
+  }
+  const root = path.join(accountHome, "sessions");
+  const relative = path.relative(root, file);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || !relative.endsWith(".jsonl")) {
+    return null;
+  }
+  return relative;
+}
+
+function retrySessionFromState(accountHome, sessionState) {
+  const relativePath = sessionRelativePath(accountHome, sessionState.file);
+  if (!relativePath) {
+    return null;
+  }
+  return {
+    sourceHome: accountHome,
+    file: sessionState.file,
+    relativePath,
+    sessionId: sessionState.sessionId || null,
+  };
+}
+
+function ensureRetrySessionAvailable(retrySession, account) {
+  if (!retrySession?.file || !retrySession.relativePath) {
+    return;
+  }
+
+  const targetFile = path.join(account.home, "sessions", retrySession.relativePath);
+  if (fs.existsSync(targetFile)) {
+    return;
+  }
+
+  try {
+    fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+    fs.copyFileSync(retrySession.file, targetFile, fs.constants.COPYFILE_EXCL);
+    console.error(`[cx-auto] copied interrupted session to ${account.name}.`);
+  } catch (error) {
+    if (fs.existsSync(targetFile)) {
+      return;
+    }
+    console.error(`[cx-auto] session sync failed for ${account.name}: ${error.message}`);
+  }
 }
 
 function execResumeArgsFromInteractiveAnalysis(analysis, prompt) {
@@ -1328,28 +1392,34 @@ async function resumeGoalIfNeeded(account, codexArgs) {
   }
 }
 
-function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
+function retryPlanAfterRateLimit(previousArgs, accountHome, options = {}) {
   const analysis = analyzeCodexArgs(previousArgs);
   const sessionState = latestSessionTurnState(accountHome, { ...options, assumeUsageLimited: true });
 
   if (!sessionState.file) {
-    return [...previousArgs];
+    return { args: [...previousArgs], session: null };
   }
 
+  const retryAnalysis = retryTargetFromSession(analysis, sessionState);
+  const retrySession = retrySessionFromState(accountHome, sessionState);
   let prompt = null;
   if (sessionState.incomplete) {
     prompt = continuationPrompt;
-    if (analysis.mode === "interactive" && process.env.CX_INTERACTIVE_AUTO_EXEC === "1") {
-      return execResumeArgsFromInteractiveAnalysis(analysis, prompt);
+    if (retryAnalysis.mode === "interactive" && process.env.CX_INTERACTIVE_AUTO_EXEC === "1") {
+      return { args: execResumeArgsFromInteractiveAnalysis(retryAnalysis, prompt), session: retrySession };
     }
   } else if (!sessionState.completed && analysis.prompt) {
     if (analysis.mode === "interactive") {
-      return [...previousArgs];
+      return { args: [...previousArgs], session: retrySession };
     }
     prompt = analysis.prompt;
   }
 
-  return resumeArgsFromAnalysis(analysis, prompt);
+  return { args: resumeArgsFromAnalysis(retryAnalysis, prompt), session: retrySession };
+}
+
+function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
+  return retryPlanAfterRateLimit(previousArgs, accountHome, options).args;
 }
 
 async function probeAccounts(excludedNames = new Set(), options = {}) {
@@ -1535,6 +1605,7 @@ async function runAuto(options, initialArgs) {
   const { autoMaxSwitches } = getRuntimeConfig();
   const exhausted = new Set();
   let codexArgs = [...initialArgs];
+  let pendingRetrySession = null;
   let switches = 0;
 
   if (accounts.length < 1) {
@@ -1570,6 +1641,7 @@ async function runAuto(options, initialArgs) {
       return 0;
     }
 
+    ensureRetrySessionAvailable(pendingRetrySession, selected.account);
     await resumeGoalIfNeeded(selected.account, codexArgs);
     const runStartedAt = Date.now() - 2000;
     const result = await runCodexMonitored(selected.account, commandArgs, logDir);
@@ -1590,7 +1662,9 @@ async function runAuto(options, initialArgs) {
       return 1;
     }
 
-    codexArgs = retryArgsAfterRateLimit(codexArgs, selected.account.home, { minMtimeMs: runStartedAt });
+    const retryPlan = retryPlanAfterRateLimit(codexArgs, selected.account.home, { minMtimeMs: runStartedAt });
+    codexArgs = retryPlan.args;
+    pendingRetrySession = retryPlan.session;
   }
 }
 
@@ -1637,6 +1711,7 @@ module.exports = {
   logChunkHasUsageLimit,
   readSessionMeta,
   normalizeReachedReason,
+  retryPlanAfterRateLimit,
   resolveResumeThreadId,
   retryArgsAfterRateLimit,
   reached,
