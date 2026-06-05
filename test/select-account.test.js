@@ -6,6 +6,7 @@ const os = require("os");
 const { spawnSync } = require("child_process");
 const path = require("path");
 const {
+  extractAccountEmail,
   isUsable,
   isUsageLimitLogLine,
   isResumeInvocation,
@@ -44,6 +45,14 @@ function cleanEnv(extra = {}) {
   delete env.CX_LIMIT_TIMEOUT_MS;
   delete env.CX_NO_TRUST;
   return { ...env, ...extra };
+}
+
+function base64UrlJson(value) {
+  return Buffer.from(JSON.stringify(value))
+    .toString("base64")
+    .replace(/=+$/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
 }
 
 function writeSession(accountHome, events) {
@@ -103,6 +112,15 @@ function tokenCountWithoutCredits() {
       },
     },
   };
+}
+
+{
+  assert.equal(extractAccountEmail({ email: "direct@example.com" }), "direct@example.com");
+  assert.equal(
+    extractAccountEmail({ tokens: { id_token: `header.${base64UrlJson({ email: "token@example.com" })}.sig` } }),
+    "token@example.com",
+  );
+  assert.equal(extractAccountEmail({ tokens: { id_token: "not-a-token" } }), "");
 }
 
 {

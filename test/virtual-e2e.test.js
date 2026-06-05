@@ -255,7 +255,7 @@ function runVirtualE2e() {
   ];
   for (let i = 1; i <= 4; i += 1) {
     const home = path.join(root, `.codex-account${i}`);
-    fs.writeFileSync(path.join(home, "auth.json"), `auth-${i}\n`);
+    fs.writeFileSync(path.join(home, "auth.json"), `${JSON.stringify({ email: `account${i}@example.com` })}\n`);
     for (const item of sharedItems) {
       assertLink(path.join(home, item), path.join(root, ".codex", item));
     }
@@ -279,7 +279,7 @@ function runVirtualE2e() {
   }
 
   result = ok("cxa", ["--dry-run", "exec", "hello"]);
-  assert.match(result.stderr, /selected account1/);
+  assert.match(result.stderr, /selected account1 \(account1@example\.com\)/);
   assert.match(result.stderr, /exec hello/);
   assert.match(result.stderr, /trust_level="trusted"/);
 

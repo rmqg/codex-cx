@@ -175,6 +175,8 @@ cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
 - 5h 用量差距在 20 个百分点以内时，优先选择非 active 账号。
 - 如果仍然相同，再按更低 5h、更低 weekly、账号名排序。
 
+自动模式打印选中账号时，如果能从该账号 `auth.json` 读取到邮箱，会把邮箱附在账号名后，例如 `[cx-auto] selected account1 (name@example.com): ...`。读不到邮箱或 `auth.json` 不是可解析 JSON 时，会保持原来的账号名输出。
+
 ## 自动切号
 
 运行期间，`cx` 会监控 Codex TUI 日志里的 usage-limit 错误。它会识别 Codex 自己的 `You've hit your usage limit`、`Your workspace is out of credits`、workspace credits/spend cap reached 类型、带 Codex HTTP 429 的 `Turn error`，以及结构化 Goal 模式 usage-limit 日志。它会忽略工具调用文本、命令输出，以及 GitHub curated-plugin sync 429 这类外部服务限流。一旦检测到真实额度限制，`cx` 会终止当前 Codex 进程，把该账号标记为本轮已耗尽，然后切到另一个可用账号。

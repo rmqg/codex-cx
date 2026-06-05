@@ -386,6 +386,106 @@ function getDefaultAccounts() {
   return defaultAccountsCache;
 }
 
+function isPlausibleEmail(value) {
+  return typeof value === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function findEmailValue(value, depth = 0) {
+  if (!value || depth > 8) {
+    return "";
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const email = findEmailValue(item, depth + 1);
+      if (email) {
+        return email;
+      }
+    }
+    return "";
+  }
+  if (typeof value !== "object") {
+    return "";
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (key.toLowerCase() === "email" && isPlausibleEmail(child)) {
+      return child.trim();
+    }
+  }
+  for (const child of Object.values(value)) {
+    const email = findEmailValue(child, depth + 1);
+    if (email) {
+      return email;
+    }
+  }
+  return "";
+}
+
+function base64UrlDecode(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  return Buffer.from(padded, "base64").toString("utf8");
+}
+
+function extractJwtEmail(token) {
+  if (typeof token !== "string") {
+    return "";
+  }
+  const parts = token.split(".");
+  if (parts.length < 2 || !parts[1]) {
+    return "";
+  }
+  try {
+    return findEmailValue(JSON.parse(base64UrlDecode(parts[1])));
+  } catch {
+    return "";
+  }
+}
+
+function findJwtEmail(value, depth = 0) {
+  if (!value || depth > 8) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return extractJwtEmail(value);
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const email = findJwtEmail(item, depth + 1);
+      if (email) {
+        return email;
+      }
+    }
+    return "";
+  }
+  if (typeof value === "object") {
+    for (const child of Object.values(value)) {
+      const email = findJwtEmail(child, depth + 1);
+      if (email) {
+        return email;
+      }
+    }
+  }
+  return "";
+}
+
+function extractAccountEmail(auth) {
+  return findEmailValue(auth) || findJwtEmail(auth);
+}
+
+function readAccountEmail(account) {
+  try {
+    return extractAccountEmail(JSON.parse(fs.readFileSync(path.join(account.home, "auth.json"), "utf8")));
+  } catch {
+    return "";
+  }
+}
+
+function accountDisplayName(account) {
+  const email = readAccountEmail(account);
+  return email ? `${account.name} (${email})` : account.name;
+}
+
 function accountSelectorHint(accounts = getDefaultAccounts()) {
   if (accounts.length < 1) {
     return "no accounts configured; run cx-setup --accounts <N> --migrate or set CX_ACCOUNT_HOMES";
@@ -1265,7 +1365,7 @@ async function probeAccounts(excludedNames = new Set(), options = {}) {
 function describeSelection(result, prefix = "cx-auto") {
   const limit = result.limits;
   console.error(
-    `[${prefix}] selected ${result.account.name}: 5h used ${formatPercent(usedPercent(limit, "primary"))}, ` +
+    `[${prefix}] selected ${accountDisplayName(result.account)}: 5h used ${formatPercent(usedPercent(limit, "primary"))}, ` +
       `weekly used ${formatPercent(usedPercent(limit, "secondary"))}`,
   );
 }
@@ -1526,6 +1626,7 @@ if (require.main === module) {
 
 module.exports = {
   accountMatches,
+  extractAccountEmail,
   analyzeCodexArgs,
   compareAccountResults,
   isUsable,

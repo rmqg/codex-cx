@@ -175,6 +175,8 @@ Remaining accounts are sorted with this policy:
 - If 5h usage is within 20 percentage points, prefer an inactive account.
 - If still tied, use lower 5h usage, then lower weekly usage, then account name.
 
+When automatic mode prints the selected account, it appends the account email when one can be read from that account's `auth.json`, for example `[cx-auto] selected account1 (name@example.com): ...`. If no email is available, or if `auth.json` is not parseable JSON, the original account-name output is preserved.
+
 ## Auto-Switching
 
 During a run, `cx` watches the Codex TUI log for usage-limit errors. It recognizes Codex's own limit messages such as `You've hit your usage limit`, `Your workspace is out of credits`, workspace credit/spend-cap reached types, `Turn error` lines with Codex HTTP 429 responses, and structured Goal-mode usage-limit logs. It ignores tool-call text, command output, and external service throttling such as GitHub curated-plugin sync 429s. If a real usage limit is detected, `cx` terminates the current Codex process, marks that account exhausted for the current wrapper run, and switches to another usable account.
