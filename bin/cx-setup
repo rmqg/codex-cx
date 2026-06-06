@@ -41,15 +41,53 @@ function usage() {
   console.log(`Usage:
   cx-setup [options]
 
+What it does:
+  cx-setup creates account CODEX_HOME directories and links shared workspace
+  state from one shared Codex home. It never links or shares auth.json; each
+  account keeps its own login or API-key credentials.
+
+Common workflows:
+  List discovered/configured accounts without changing files:
+    cx-setup --list
+
+  Add one more numbered account to an existing full setup:
+    cx-setup --accounts 3 --full --migrate
+    CODEX_HOME="$HOME/.codex-account3" codex login
+
+  Create numbered accounts with shared sessions:
+    cx-setup --accounts <N> --migrate
+
+  Create numbered accounts with full shared state:
+    cx-setup --accounts <N> --full --migrate
+
+  Use custom named account homes:
+    cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
+
+  Use an isolated shared workspace and matching numbered account prefix:
+    cx-setup --accounts <N> --home ~/.codex-shared --prefix ~/.codex-account --full --migrate
+
+  Remove one account or prune old discovered accounts:
+    cx-setup --remove free
+    cx-setup --accounts 2 --prune --migrate
+
+  Create an API-key account:
+    printf '%s' "$OPENAI_API_KEY" | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
+
 Options:
-  --accounts N          Create/link ~/.codex-account1..N.
-  --homes LIST          Explicit account homes, comma-separated. Entries can be name=path or path.
-  --add-api-key NAME    Create/update one API-key account. Default home: ~/.codex-account-NAME.
+  --accounts N          Select numbered homes ~/.codex-account1..N. Re-run with
+                        a larger N to add another numbered account; lowering N
+                        does not remove old homes unless --prune is also used.
+  --homes LIST          Select explicit account homes, comma-separated. Entries
+                        can be name=path or path. Names become --account selectors.
+  --add-api-key NAME    Create/update one named API-key account. Default home:
+                        ~/.codex-account-NAME.
   --account-home DIR    Account home to use with --add-api-key.
-  --api-key KEY         API key to write for --add-api-key.
+  --api-key KEY         API key to write for --add-api-key. Prefer env or stdin
+                        so the key is not left in shell history.
   --api-key-env ENV     Read the API key for --add-api-key from ENV.
   --api-key-stdin       Read the API key for --add-api-key from stdin.
-  --openai-base-url URL Write openai_base_url for the API-key account.
+  --openai-base-url URL Write openai_base_url for the API-key account. The URL is
+                        normalized to http(s) without a trailing slash.
   --model MODEL         Write the default model for the API-key account.
   --api-key-check[=MODE]
                         Validate the OpenAI-compatible endpoint before writing auth.json.
@@ -62,18 +100,32 @@ Options:
   --prune               With --accounts/--homes, move extra discovered homes to backups.
   --api-key-mode MODE   Persist local auto-selection mode: prefer or fallback.
   --home DIR            Shared Codex home. Default: ~/.codex.
-  --prefix NAME         Account directory prefix. Default: ~/.codex-account.
-  --full                Also share Codex state/log sqlite files.
-  --migrate             Merge existing account data into shared home before linking.
-  --force               Replace existing non-symlink account paths with backups before linking.
+  --prefix PREFIX       Prefix for numbered account homes. Default: ~/.codex-account.
+  --full                Also share Codex logs, goals, memories, and state sqlite files.
+  --migrate             Copy existing selected shared items into the shared home
+                        before replacing those account paths with symlinks.
+  --force               Move existing non-symlink paths to backups without copying first.
   --allow-active        Do not refuse active Codex account homes. Risky with --full.
   --dry-run             Print actions without changing files.
 
-This never links auth.json. Log in once per account with:
-  CODEX_HOME=~/.codex-accountN codex login
+Shared items:
+  Default:
+    sessions, archived_sessions, memories, skills, shell_snapshots, cache,
+    generated_images, history.jsonl, models_cache.json
 
-API-key example:
-  printf '%s' "$OPENAI_API_KEY" | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate`);
+  With --full:
+    default items plus log, goals_1.sqlite*, logs_2.sqlite*,
+    memories_1.sqlite*, state_5.sqlite*
+
+Important:
+  Exit running Codex sessions before real --full/--migrate runs.
+  After --full, avoid multiple concurrent Codex instances that write state unless
+  you accept the usual shared-SQLite concurrency risk.
+  Log in once per ChatGPT account with:
+    CODEX_HOME=~/.codex-accountN codex login
+
+More docs:
+  README.md, docs/README.en.md, and docs/README.zh-CN.md`);
 }
 
 function parseArgs(argv) {

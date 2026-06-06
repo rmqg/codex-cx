@@ -129,6 +129,18 @@ assert.throws(
 
 {
   const setup = path.resolve(__dirname, "../bin/cx-setup");
+  const result = spawnSync(process.execPath, [setup, "--help"], {
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /Add one more numbered account/);
+  assert.match(result.stdout, /Create numbered accounts with full shared state/);
+  assert.match(result.stdout, /never links or shares auth\.json/);
+}
+
+{
+  const setup = path.resolve(__dirname, "../bin/cx-setup");
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-setup-apikey-"));
   const configHome = path.join(tempHome, "xdg");
   const result = spawnSync(
