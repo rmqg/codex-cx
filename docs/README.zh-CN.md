@@ -66,6 +66,7 @@ cx --no-trust [codex args...]
 cxa [codex args...]
 cxr [extra resume args...]
 cx-setup [options]
+cx-setup --list
 cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
 cx-setup --remove free
 cx-setup --accounts 2 --prune --migrate
@@ -100,6 +101,8 @@ cx --account work -- --dry-run exec "hello"
 ```text
 ~/.codex-account*
 ```
+
+自动发现会跳过 `cx-setup --remove` 或 `--prune` 产生的 `.cx-backup-*` 备份目录。
 
 新环境中先用 `cx-setup --accounts <N>` 创建这些目录。也可以显式指定要探测的编号范围：
 
@@ -165,6 +168,16 @@ cx-setup --api-key-mode prefer
 
 ## 增减账号
 
+列出 setup 当前会发现或选择的账号：
+
+```sh
+cx-setup --list
+cx-setup --accounts 3 --list
+cx-setup --homes work=~/.codex-work,school=~/.codex-school --list
+```
+
+列表会显示账号名、home 是否存在、是否 active、认证类型、已链接的共享项数量和 home 路径。它不会读取或打印 API key。
+
 增加编号账号仍使用：
 
 ```sh
@@ -183,9 +196,14 @@ cx-setup --accounts 2 --prune --migrate
 cx-setup --remove free
 cx-setup --remove account3
 cx-setup --remove 3
+cx-setup --homes work=~/.codex-work --remove work
 ```
 
-移除账号默认是移动整个账号 home 到备份路径，不会删除或共享其中的 `auth.json`。如果目标账号正被 Codex 进程使用，真实执行会拒绝操作；先退出对应会话，或明确接受风险时使用 `--allow-active`。
+移除账号默认是移动整个账号 home 到备份路径，不会删除或共享其中的 `auth.json`。`--remove` 的候选集合会合并自动发现账号和 `--accounts`/`--homes` 显式指定的账号；同一个 home 只处理一次。如果选择器匹配多个不同 home，会报歧义并要求使用更明确的账号名或路径。
+
+备份目录名包含 `.cx-backup-*`，新版 `cx`、`cxr` 和 `cx-setup --list` 都会跳过这些备份，所以被移除的 API key 账号不会再因为备份目录仍在 home 下而被自动选择。
+
+如果目标账号正被 Codex 进程使用，真实执行会拒绝操作；先退出对应会话，或明确接受风险时使用 `--allow-active`。
 
 ## 共享工作空间
 
@@ -219,6 +237,7 @@ state_5.sqlite*
 
 ```sh
 cx-setup --accounts <N> --dry-run
+cx-setup --list
 cx-setup --accounts <N> --migrate
 cx-setup --accounts <N> --full --migrate
 cx-setup --accounts <N> --home ~/.codex-shared --prefix ~/.codex-account --full --migrate
@@ -317,6 +336,7 @@ CX_INTERACTIVE_AUTO_EXEC=1
 - 自动切号后停在目录信任提示：确认正在使用新版 `cx`；新版默认会注入当前工作根的 trust 配置。如果你设置了 `CX_NO_TRUST=1` 或 `--no-trust`，需要取消它或手动信任目录。
 - 自动切号后报 `No saved session found with ID Continue...`：这是旧版生成了非法的 `codex resume --last "Continue ..."`。更新到新版；新版有精确 session id 时会用 `codex resume <id> "Continue ..."`，没有 id 时会降级到 `codex exec resume --last "Continue ..."`。
 - 自动切号后 resume 到错误会话：确认正在使用新版 `cx`；新版会优先恢复刚刚中断的精确 session id，并在未共享 `sessions` 时复制这一条 session 文件。仍有问题时运行 `cx-setup --migrate` 或 `cx-setup --full --migrate`，确保所有账号共享 `sessions`。
+- `cx-setup --remove free` 后仍自动选择 free：更新到新版；旧版会把 `.codex-account-free.cx-backup-*` 备份目录继续当作账号发现，新版会跳过 `.cx-backup-*` 备份。可以用 `cx-setup --list` 确认候选账号。
 - setup 被已有文件拦住：用 `--migrate` 复制并备份，或用 `--force` 只备份不复制。
 - setup 拒绝 active 目录：先退出正在运行的 Codex 会话，再重新运行 `cx-setup`。
 - setup 报重复账号名或重复 home：检查 `--homes` 或 `CX_ACCOUNT_HOMES`，确保每个账号名和每个 `CODEX_HOME` 都唯一。

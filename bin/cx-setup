@@ -56,6 +56,8 @@ Options:
                         MODE: auto, responses, chat, or models. Default: auto.
   --api-key-check-timeout-ms MS
                         Timeout for --api-key-check. Default: ${defaultApiKeyCheckTimeoutMs}.
+  --list, --list-accounts
+                        List selected/discovered account homes without changing files.
   --remove SELECTOR     Move a discovered/configured account home to a backup.
   --prune               With --accounts/--homes, move extra discovered homes to backups.
   --api-key-mode MODE   Persist local auto-selection mode: prefer or fallback.
@@ -94,6 +96,7 @@ function parseArgs(argv) {
     model: null,
     apiKeyCheck: null,
     apiKeyCheckTimeoutMs: defaultApiKeyCheckTimeoutMs,
+    list: false,
     remove: [],
     prune: false,
     apiKeyMode: null,
@@ -147,6 +150,10 @@ function parseArgs(argv) {
     }
     if (arg === "--prune") {
       options.prune = true;
+      continue;
+    }
+    if (arg === "--list" || arg === "--list-accounts") {
+      options.list = true;
       continue;
     }
     if (arg === "--accounts") {
@@ -352,6 +359,11 @@ function defaultApiKeyAccountHome(name) {
   return path.join(home, `.codex-account-${name}`);
 }
 
+function isPathSelector(selector) {
+  const value = String(selector || "").trim();
+  return value.includes("/") || value === "." || value === ".." || value.startsWith("~");
+}
+
 function naturalAccountSort(a, b) {
   const left = a.suffix.match(/^\d+$/) ? Number(a.suffix) : null;
   const right = b.suffix.match(/^\d+$/) ? Number(b.suffix) : null;
@@ -385,7 +397,11 @@ function discoverAccountHomes() {
   }
 
   return entries
-    .filter((entry) => entry.name.startsWith(".codex-account") && entry.name !== ".codex-account")
+    .filter((entry) =>
+      entry.name.startsWith(".codex-account") &&
+      entry.name !== ".codex-account" &&
+      !entry.name.includes(".cx-backup-")
+    )
     .map((entry, index) => ({
       dirent: entry,
       name: discoveredAccountName(entry.name, index),
@@ -490,6 +506,22 @@ function validateAccounts(accounts, sharedHome) {
     homes.set(normalizedHome, account);
     return { ...account, name, home: normalizedHome };
   });
+}
+
+function mergeAccounts(...groups) {
+  const merged = [];
+  const homes = new Set();
+  for (const group of groups) {
+    for (const account of group) {
+      const normalizedHome = path.resolve(account.home);
+      if (homes.has(normalizedHome)) {
+        continue;
+      }
+      homes.add(normalizedHome);
+      merged.push({ ...account, home: normalizedHome });
+    }
+  }
+  return merged;
 }
 
 function activeCodexHomes() {
@@ -660,13 +692,90 @@ function removeAccountHome(account, options) {
 
 function selectorMatches(account, selector, accounts) {
   const normalized = String(selector || "").trim().toLowerCase();
+  const normalizedPath = isPathSelector(selector) ? path.resolve(expandHomePath(String(selector).trim())) : null;
   const index = accounts.indexOf(account);
   return (
     normalized === String(index + 1) ||
     normalized === account.name.toLowerCase() ||
+    (normalizedPath && normalizedPath === path.resolve(account.home)) ||
     normalized === path.basename(account.home).toLowerCase() ||
     normalized === path.basename(account.home).replace(/^\.codex-account-?/, "").toLowerCase()
   );
+}
+
+function findRemoveTarget(selector, accounts) {
+  const matches = accounts.filter((candidate) => selectorMatches(candidate, selector, accounts));
+  if (matches.length === 0) {
+    throw new Error(`Unknown account to remove: ${selector}. Run cx-setup --list to see removable accounts.`);
+  }
+  const uniqueHomes = [...new Map(matches.map((account) => [path.resolve(account.home), account])).values()];
+  if (uniqueHomes.length > 1) {
+    throw new Error(
+      `Ambiguous account selector for --remove: ${selector}. Matches: ` +
+        uniqueHomes.map((account) => `${account.name}=${account.home}`).join(", "),
+    );
+  }
+  return uniqueHomes[0];
+}
+
+function readAccountAuth(account) {
+  const authPath = path.join(account.home, "auth.json");
+  if (!fs.existsSync(authPath)) {
+    return { status: "missing" };
+  }
+  try {
+    return { status: "ok", auth: JSON.parse(fs.readFileSync(authPath, "utf8")) };
+  } catch {
+    return { status: "invalid" };
+  }
+}
+
+function accountAuthLabel(account) {
+  const result = readAccountAuth(account);
+  if (result.status !== "ok") {
+    return result.status;
+  }
+  if (result.auth?.auth_mode === "apikey" || result.auth?.OPENAI_API_KEY) {
+    return "api-key";
+  }
+  return result.auth?.auth_mode || "account";
+}
+
+function linkedSharedItemCount(accountHome, sharedHome, items) {
+  let count = 0;
+  for (const item of items) {
+    const target = path.join(accountHome, item);
+    const source = path.join(sharedHome, item);
+    const existing = fs.lstatSync(target, { throwIfNoEntry: false });
+    if (!existing?.isSymbolicLink()) {
+      continue;
+    }
+    if (path.resolve(path.dirname(target), fs.readlinkSync(target)) === source) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function printAccountList(accounts, sharedHome, options) {
+  const items = options.full ? fullSharedItems : defaultSharedItems;
+  const activeHomes = activeCodexHomes();
+  const normalizedSharedHome = path.resolve(sharedHome);
+  if (accounts.length < 1) {
+    console.log("No Codex account homes found.");
+    return;
+  }
+
+  console.log("Account   exists   active   auth      linked   home");
+  for (const account of accounts) {
+    const exists = fs.lstatSync(account.home, { throwIfNoEntry: false }) ? "yes" : "-";
+    const active = activeHomes.has(account.home) ? "yes" : "-";
+    const auth = accountAuthLabel(account);
+    const linked = `${linkedSharedItemCount(account.home, normalizedSharedHome, items)}/${items.length}`;
+    console.log(
+      `${account.name.padEnd(9)} ${exists.padEnd(8)} ${active.padEnd(8)} ${auth.padEnd(9)} ${linked.padEnd(8)} ${account.home}`,
+    );
+  }
 }
 
 function readApiKey(options) {
@@ -971,29 +1080,33 @@ function linkItem(accountHome, sharedHome, item, options) {
 async function setup(options) {
   const items = options.full ? fullSharedItems : defaultSharedItems;
   const sharedHome = path.resolve(options.sharedHome);
+  const hasConfiguredHomes = options.accounts !== null || Boolean(options.homes) || Boolean(options.addApiKey);
   const shouldConfigureHomes =
-    options.accounts !== null ||
-    Boolean(options.homes) ||
-    Boolean(options.addApiKey) ||
+    hasConfiguredHomes ||
     options.prune ||
-    (!options.apiKeyMode && options.remove.length === 0);
-  const homes = shouldConfigureHomes ? validateAccounts(accountHomes(options), sharedHome) : [];
+    (!options.apiKeyMode && options.remove.length === 0 && !options.list);
+  const homes = shouldConfigureHomes || options.list || options.remove.length > 0
+    ? validateAccounts(accountHomes(options), sharedHome)
+    : [];
   const selectedHomes = new Set(homes.map((account) => account.home));
-  const removableAccounts = validateAccounts(discoverAccountHomes(), sharedHome);
+  const discoveredAccounts = validateAccounts(discoverAccountHomes(), sharedHome);
+  const removableAccounts = mergeAccounts(homes, discoveredAccounts);
   const activeHomes = activeCodexHomes();
   const removeTargets = [];
   let apiKeyAccount = null;
+
+  if (options.list) {
+    const accounts = hasConfiguredHomes ? homes : discoveredAccounts;
+    printAccountList(accounts, sharedHome, options);
+    return;
+  }
 
   if (options.apiKeyMode) {
     writeLocalConfigPatch({ apiKeyMode: options.apiKeyMode }, options);
   }
 
   for (const selector of options.remove) {
-    const account = removableAccounts.find((candidate) => selectorMatches(candidate, selector, removableAccounts));
-    if (!account) {
-      throw new Error(`Unknown account to remove: ${selector}`);
-    }
-    removeTargets.push(account);
+    removeTargets.push(findRemoveTarget(selector, removableAccounts));
   }
   if (options.prune) {
     if (options.accounts === null && !options.homes) {
@@ -1017,14 +1130,16 @@ async function setup(options) {
   for (const account of uniqueRemoveTargets) {
     removeAccountHome(account, options);
   }
+  const removedHomes = new Set(uniqueRemoveTargets.map((account) => account.home));
+  const remainingHomes = homes.filter((account) => !removedHomes.has(account.home));
 
-  if (homes.length < 1) {
+  if (remainingHomes.length < 1) {
     if (options.apiKeyMode || uniqueRemoveTargets.length > 0) {
       return;
     }
     throw new Error("No account homes selected. Use --accounts <N> on a new machine, or --homes name=/path,...");
   }
-  const activeTargets = homes.filter((account) => activeHomes.has(account.home));
+  const activeTargets = remainingHomes.filter((account) => activeHomes.has(account.home));
 
   if (activeTargets.length > 0 && !options.allowActive && !options.dryRun) {
     throw new Error(
@@ -1034,7 +1149,7 @@ async function setup(options) {
   }
 
   if (options.addApiKey) {
-    apiKeyAccount = homes.find((candidate) => candidate.name.toLowerCase() === options.addApiKey.toLowerCase());
+    apiKeyAccount = remainingHomes.find((candidate) => candidate.name.toLowerCase() === options.addApiKey.toLowerCase());
     if (!apiKeyAccount) {
       throw new Error(`API-key account was not selected: ${options.addApiKey}`);
     }
@@ -1043,7 +1158,7 @@ async function setup(options) {
 
   ensureDir(sharedHome, options);
 
-  for (const { home: accountHome } of homes) {
+  for (const { home: accountHome } of remainingHomes) {
     ensureDir(accountHome, options);
     for (const item of items) {
       linkItem(accountHome, sharedHome, item, options);
@@ -1056,7 +1171,7 @@ async function setup(options) {
   }
 
   console.log("\nNext steps:");
-  for (const account of homes.filter((candidate) => candidate.name !== options.addApiKey)) {
+  for (const account of remainingHomes.filter((candidate) => candidate.name !== options.addApiKey)) {
     console.log(`  CODEX_HOME=${account.home} codex login`);
   }
   console.log("  cx status");

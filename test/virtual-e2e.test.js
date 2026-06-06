@@ -354,6 +354,11 @@ function runVirtualE2e() {
   assert.match(result.stderr, /selected free \(api-key\)/);
   result = ok("cxa", ["--dry-run", "exec", "fallback to api key"], { FAKE_LIMITS: exhaustedLimits });
   assert.match(result.stderr, /selected free \(api-key\)/);
+  ok("cx-setup", ["--remove", "free"]);
+  result = ok("cxa", ["--dry-run", "exec", "after remove"], { CX_API_KEY_MODE: "prefer" });
+  assert.match(result.stderr, /selected account1 \(account1@example\.com\)/);
+  assert.doesNotMatch(result.stderr, /selected free/);
+  assert.ok(fs.readdirSync(root).some((entry) => /^\.codex-account-free\.cx-backup-/.test(entry)));
 
   result = run("cx", ["status"], { CX_ACCOUNT_HOMES: `work=${root}/a,WORK=${root}/b` });
   assert.equal(result.status, 2);

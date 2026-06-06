@@ -127,9 +127,9 @@ let terminating = false;
 
 function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.5.9";
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version || "0.6.0";
   } catch {
-    return "0.5.9";
+    return "0.6.0";
   }
 }
 
@@ -326,7 +326,11 @@ function discoverAccountHomes() {
   }
 
   return entries
-    .filter((entry) => entry.name.startsWith(".codex-account") && entry.name !== ".codex-account")
+    .filter((entry) =>
+      entry.name.startsWith(".codex-account") &&
+      entry.name !== ".codex-account" &&
+      !entry.name.includes(".cx-backup-")
+    )
     .map((entry, index) => ({
       dirent: entry,
       name: discoveredAccountName(entry.name, index),

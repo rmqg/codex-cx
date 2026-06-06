@@ -66,6 +66,7 @@ cx --no-trust [codex args...]
 cxa [codex args...]
 cxr [extra resume args...]
 cx-setup [options]
+cx-setup --list
 cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
 cx-setup --remove free
 cx-setup --accounts 2 --prune --migrate
@@ -100,6 +101,8 @@ When no account environment variable is set, `cx` auto-discovers existing accoun
 ```text
 ~/.codex-account*
 ```
+
+Auto-discovery skips `.cx-backup-*` directories created by `cx-setup --remove` or `--prune`.
 
 On a new machine, create those homes first with `cx-setup --accounts <N>`. You can also explicitly force the numbered range to probe:
 
@@ -165,6 +168,16 @@ cx-setup --api-key-mode prefer
 
 ## Adding And Removing Accounts
 
+List the accounts setup currently discovers or selects:
+
+```sh
+cx-setup --list
+cx-setup --accounts 3 --list
+cx-setup --homes work=~/.codex-work,school=~/.codex-school --list
+```
+
+The list shows account name, whether the home exists, active state, auth type, linked shared-item count, and home path. It does not read or print API keys.
+
 Add numbered accounts as before:
 
 ```sh
@@ -183,9 +196,14 @@ Remove one named or numbered account:
 cx-setup --remove free
 cx-setup --remove account3
 cx-setup --remove 3
+cx-setup --homes work=~/.codex-work --remove work
 ```
 
-Removal moves the whole account home to a backup path by default. It does not delete or share any `auth.json`. If the target home is used by a running Codex process, real runs refuse to proceed; exit that session first, or pass `--allow-active` if you accept the risk.
+Removal moves the whole account home to a backup path by default. It does not delete or share any `auth.json`. `--remove` uses the merged candidate set from auto-discovered accounts plus accounts explicitly selected with `--accounts` or `--homes`; the same home is processed only once. If a selector matches multiple different homes, setup reports the ambiguity and asks for a more specific name or path.
+
+Backup directory names contain `.cx-backup-*`, and current `cx`, `cxr`, and `cx-setup --list` skip those backups. A removed API-key account will not be auto-selected again just because its backup directory still exists under the home directory.
+
+If the target home is used by a running Codex process, real runs refuse to proceed; exit that session first, or pass `--allow-active` if you accept the risk.
 
 ## Shared Workspace Setup
 
@@ -219,6 +237,7 @@ Useful setup commands:
 
 ```sh
 cx-setup --accounts <N> --dry-run
+cx-setup --list
 cx-setup --accounts <N> --migrate
 cx-setup --accounts <N> --full --migrate
 cx-setup --accounts <N> --home ~/.codex-shared --prefix ~/.codex-account --full --migrate
@@ -317,6 +336,7 @@ By default, interrupted interactive turns continue through TUI `codex resume <se
 - Auto-switch stops at the directory trust prompt: confirm the installed `cx` is current. Current versions inject trust for the work root by default; if `CX_NO_TRUST=1` or `--no-trust` is set, unset it or trust the directory manually.
 - Auto-switch reports `No saved session found with ID Continue...`: an older version built the invalid command `codex resume --last "Continue ..."`. Update to the current version; it uses `codex resume <id> "Continue ..."` when an exact id is available, and falls back to `codex exec resume --last "Continue ..."` when no id can be found.
 - Auto-switch resumes the wrong conversation: confirm the installed `cx` is current. Current versions target the exact interrupted session id first and copy that one session file when `sessions` is not shared. If it still happens, run `cx-setup --migrate` or `cx-setup --full --migrate` so all account homes share `sessions`.
+- `cx-setup --remove free` still auto-selects free: update to the current version. Older versions discovered `.codex-account-free.cx-backup-*` backup directories as accounts; current versions skip `.cx-backup-*` backups. Run `cx-setup --list` to confirm the candidates.
 - Existing files block setup: rerun with `--migrate` to copy and back up, or `--force` to back up without copying.
 - Setup refuses active homes: exit running Codex sessions, then rerun `cx-setup`.
 - Setup reports duplicate account names/homes: fix `--homes` or `CX_ACCOUNT_HOMES` so every account has a unique name and unique `CODEX_HOME`.

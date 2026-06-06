@@ -30,6 +30,7 @@ function cleanEnv(extra = {}) {
 
   assert.equal(options.accounts, null);
   assert.equal(options.homes, null);
+  assert.equal(options.list, false);
 }
 
 {
@@ -39,6 +40,13 @@ function cleanEnv(extra = {}) {
   assert.equal(options.full, true);
   assert.equal(options.migrate, true);
   assert.equal(options.dryRun, true);
+}
+
+{
+  const options = parseArgs(["--list-accounts", "--accounts", "2"]);
+
+  assert.equal(options.list, true);
+  assert.equal(options.accounts, 2);
 }
 
 {
@@ -181,6 +189,24 @@ assert.throws(
 
 {
   const setup = path.resolve(__dirname, "../bin/cx-setup");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-setup-remove-custom-"));
+  const customHome = path.join(tempHome, "codex-work");
+  fs.mkdirSync(customHome);
+  fs.writeFileSync(path.join(customHome, "auth.json"), "{}\n");
+
+  const result = spawnSync(process.execPath, [setup, "--homes", `work=${customHome}`, "--remove", "work"], {
+    env: cleanEnv({ HOME: tempHome }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(customHome), false);
+  assert.ok(fs.readdirSync(tempHome).some((entry) => /^codex-work\.cx-backup-/.test(entry)));
+  fs.rmSync(tempHome, { recursive: true, force: true });
+}
+
+{
+  const setup = path.resolve(__dirname, "../bin/cx-setup");
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-setup-prune-"));
   fs.mkdirSync(path.join(tempHome, ".codex-account1"));
   fs.mkdirSync(path.join(tempHome, ".codex-account2"));
@@ -197,6 +223,29 @@ assert.throws(
   assert.equal(fs.existsSync(path.join(tempHome, ".codex-account-free")), false);
   assert.ok(fs.readdirSync(tempHome).some((entry) => /^\.codex-account2\.cx-backup-/.test(entry)));
   assert.ok(fs.readdirSync(tempHome).some((entry) => /^\.codex-account-free\.cx-backup-/.test(entry)));
+  fs.rmSync(tempHome, { recursive: true, force: true });
+}
+
+{
+  const setup = path.resolve(__dirname, "../bin/cx-setup");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-setup-list-"));
+  fs.mkdirSync(path.join(tempHome, ".codex-account1"));
+  fs.mkdirSync(path.join(tempHome, ".codex-account-free.cx-backup-20260606034723-1872314"));
+  fs.writeFileSync(path.join(tempHome, ".codex-account1", "auth.json"), "{}\n");
+  fs.writeFileSync(
+    path.join(tempHome, ".codex-account-free.cx-backup-20260606034723-1872314", "auth.json"),
+    `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-backup" })}\n`,
+  );
+
+  const result = spawnSync(process.execPath, [setup, "--list"], {
+    env: cleanEnv({ HOME: tempHome }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /account1/);
+  assert.doesNotMatch(result.stdout, /free/);
+  assert.doesNotMatch(result.stdout, /cx-backup/);
   fs.rmSync(tempHome, { recursive: true, force: true });
 }
 
