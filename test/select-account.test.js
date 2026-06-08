@@ -16,6 +16,8 @@ const {
   shouldResumeGoalStatus,
   retryArgsAfterRateLimit,
   selectResult,
+  ensureTrustedProjectsForCodexHome,
+  trustedProjectPathsFromCodexArgs,
 } = require("../bin/cx");
 
 function account(name, primary, secondary, options = {}) {
@@ -46,6 +48,8 @@ function cleanEnv(extra = {}) {
   delete env.CX_INTERACTIVE_AUTO_EXEC;
   delete env.CX_LIMIT_TIMEOUT_MS;
   delete env.CX_NO_TRUST;
+  delete env.CODEX_TRUST_ALL;
+  delete env.CX_REAL_CODEX;
   return { ...env, ...extra };
 }
 
@@ -343,6 +347,29 @@ function tokenCountWithoutCredits() {
 }
 
 {
+  const accountHome = tempAccountHome();
+  const startCwd = fs.mkdtempSync(path.join(os.tmpdir(), "cx-trust-start-"));
+  const cdTarget = fs.mkdtempSync(path.join(os.tmpdir(), "cx-trust-cd-"));
+  const paths = trustedProjectPathsFromCodexArgs(["--cd", cdTarget, "exec", "hello"], startCwd);
+
+  assert.deepEqual(new Set(paths), new Set([fs.realpathSync.native(startCwd), fs.realpathSync.native(cdTarget)]));
+
+  const result = ensureTrustedProjectsForCodexHome(accountHome, paths);
+  const config = fs.readFileSync(path.join(accountHome, "config.toml"), "utf8");
+  assert.equal(result.changed, true);
+  assert.equal(config.includes(`[projects.${JSON.stringify(fs.realpathSync.native(startCwd))}]`), true);
+  assert.equal(config.includes(`[projects.${JSON.stringify(fs.realpathSync.native(cdTarget))}]`), true);
+  assert.equal((config.match(/trust_level = "trusted"/g) || []).length, 2);
+
+  const second = ensureTrustedProjectsForCodexHome(accountHome, paths);
+  assert.equal(second.changed, false, "trust writes should be idempotent");
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+  fs.rmSync(startCwd, { recursive: true, force: true });
+  fs.rmSync(cdTarget, { recursive: true, force: true });
+}
+
+{
   assert.equal(isResumeInvocation(["resume", "--last"]), true);
   assert.equal(isResumeInvocation(["exec", "resume", "--last"]), true);
   assert.equal(isResumeInvocation(["e", "--json", "resume", "--last"]), true);
@@ -455,9 +482,8 @@ function tokenCountWithoutCredits() {
     encoding: "utf8",
   });
   assert.equal(trusted.status, 0);
-  assert.match(trusted.stderr, /-c/);
-  assert.match(trusted.stderr, /trust_level="trusted"/);
-  assert.match(trusted.stderr, /projects\./);
+  assert.doesNotMatch(trusted.stderr, /trust_level="trusted"/);
+  assert.equal(fs.existsSync(path.join(tempHome, ".codex-account1", "config.toml")), false);
 
   const disabledByFlag = spawnSync(process.execPath, [cx, "--account", "1", "--dry-run", "--no-trust", "exec", "hello"], {
     cwd: trustedCwd,

@@ -2,6 +2,18 @@
 
 `codex-cx` provides account-switching wrappers for the OpenAI Codex CLI. It is meant for local setups where each ChatGPT/Codex account has its own `CODEX_HOME`, while conversation sessions and other workspace state can be shared.
 
+## Why Local Switching
+
+`codex-cx` does not proxy model requests or replace the official Codex protocol. It sets the right `CODEX_HOME` for each account and then launches the real Codex CLI.
+
+Compared with relay/proxy workflows, this has a few practical advantages:
+
+- Fewer compatibility bugs: login, resume, goals, plugins, MCP, images, sandboxing, and config remain handled by the official Codex CLI.
+- More stable connections: there is no extra stream-forwarding layer that can drop, rewrite, or lag behind new Codex behavior.
+- Better original feature coverage: new Codex CLI subcommands and options usually pass through without wrapper changes.
+- More seamless handoff: when one account hits usage limits, `cx` switches accounts and targets the exact interrupted session first.
+- Clearer credential isolation: every account keeps its own `auth.json`; credentials are not linked, copied, or shared.
+
 ## Quick Start
 
 1. Install Node.js 18 or newer.
@@ -51,6 +63,14 @@ cx status
 cxa --dry-run
 ```
 
+Optional: install the PATH wrapper when you also want direct `codex` runs to trust the current project automatically:
+
+```sh
+cx-setup --install-codex-wrapper --force
+```
+
+This installs or updates `~/.local/bin/codex`. Make sure `~/.local/bin` appears in PATH before the official `codex` binary. If an old shell cached the previous path, run `rehash` or open a new terminal.
+
 ## Commands
 
 ```sh
@@ -68,6 +88,7 @@ cxr [extra resume args...]
 cx-setup [options]
 cx-setup --help
 cx-setup --list
+cx-setup --install-codex-wrapper --force
 cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
 cx-setup --remove free
 cx-setup --accounts 2 --prune --migrate
@@ -93,7 +114,16 @@ Use `--` when an argument must be passed to Codex even though it looks like a `c
 cx --account work -- --dry-run exec "hello"
 ```
 
-By default, `cx` injects a temporary Codex config override for the current work root: `projects."<cwd>".trust_level="trusted"`. This prevents a newly selected account from stopping at the “Do you trust the contents of this directory?” prompt during automatic switching. The override applies only to that launch and does not write to the account's `config.toml`; use `--no-trust` or `CX_NO_TRUST=1` to keep Codex's normal directory trust prompt.
+By default, `cx` writes the current directory and any `--cd`/`-C` target into the selected account's `CODEX_HOME/config.toml` before launching the real Codex CLI:
+
+```toml
+[projects."/some/path"]
+trust_level = "trusted"
+```
+
+This prevents a newly selected account from stopping at the “Do you trust the contents of this directory?” prompt during automatic switching. The write is idempotent and only updates the matching project table's `trust_level`; it never links, copies, or shares `auth.json`. Use `--no-trust` or `CX_NO_TRUST=1` to keep Codex's normal directory trust prompt.
+
+After `cx-setup --install-codex-wrapper --force`, direct `codex` runs perform the same project-trust write before handing off to the real Codex CLI. Set `CODEX_TRUST_ALL=0` or `CX_NO_TRUST=1` to disable that wrapper behavior; set `CX_REAL_CODEX=/path/to/codex` if the wrapper cannot find the real Codex binary.
 
 ## Multiple Accounts
 
@@ -244,6 +274,7 @@ cx-setup --accounts <N> --full --migrate
 cx-setup --accounts <N> --home ~/.codex-shared --prefix ~/.codex-account --full --migrate
 cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
 cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
+cx-setup --install-codex-wrapper --force
 cx-setup --accounts 2 --prune --migrate
 cx-setup --remove free
 ```
@@ -304,6 +335,8 @@ CX_ACCOUNT_HOMES=name=/path,name2=/path2
 CX_API_KEY_MODE=prefer|fallback
 CX_NO_BYPASS=1
 CX_NO_TRUST=1
+CODEX_TRUST_ALL=0
+CX_REAL_CODEX=/path/to/codex
 CX_AUTO_RESUME_GOAL=0
 CX_LIMIT_TIMEOUT_MS=15000
 CX_LIMIT_RETRIES=2
@@ -321,7 +354,9 @@ CX_INTERACTIVE_AUTO_EXEC=1
 
 By default, `cx` adds `--dangerously-bypass-approvals-and-sandbox` unless a sandbox or approval option is already present. Use `--no-bypass` or `CX_NO_BYPASS=1` to disable that default.
 
-By default, `cx` trusts the work root used for the launch so account switches are not interrupted by the directory trust prompt. Use `--no-trust` or `CX_NO_TRUST=1` to disable that default.
+By default, `cx` writes the launch cwd and any `--cd`/`-C` target to the selected account's `config.toml` so account switches are not interrupted by the directory trust prompt. Use `--no-trust` or `CX_NO_TRUST=1` to disable that default.
+
+After the direct `codex` PATH wrapper is installed, `CODEX_TRUST_ALL=0` disables only the direct `codex` project-trust write. `CX_NO_TRUST=1` disables automatic project-trust writes for both `cx` and direct `codex`. `CX_REAL_CODEX` can point the wrapper at the real Codex CLI binary.
 
 By default, resume commands automatically reactivate paused, usage-limited, or blocked goals. Set `CX_AUTO_RESUME_GOAL=0` to disable this preflight.
 
@@ -334,7 +369,9 @@ By default, interrupted interactive turns continue through TUI `codex resume <se
 - `All candidate accounts are exhausted or unavailable`: all probed accounts failed login/probing or hit a 5h/weekly limit.
 - Probe errors like `failed to fetch codex rate limits`: increase `CX_LIMIT_TIMEOUT_MS` or `CX_LIMIT_RETRIES` if the network is temporarily slow.
 - `cx status` does not show active accounts: active detection reads `/proc`, so it is Linux-focused.
-- Auto-switch stops at the directory trust prompt: confirm the installed `cx` is current. Current versions inject trust for the work root by default; if `CX_NO_TRUST=1` or `--no-trust` is set, unset it or trust the directory manually.
+- Auto-switch stops at the directory trust prompt: confirm the installed `cx` is current. Current versions write the cwd and any `--cd`/`-C` target into the selected account's `config.toml`; if `CX_NO_TRUST=1` or `--no-trust` is set, unset it or trust the directory manually.
+- Direct `codex` still shows the directory trust prompt: run `cx-setup --install-codex-wrapper --force`, confirm `command -v codex` points at `~/.local/bin/codex`, and run `rehash` or open a new terminal if an old shell cached the previous path.
+- The `codex` wrapper cannot find the real Codex CLI: confirm another official `codex` binary exists later in PATH, or set `CX_REAL_CODEX=/path/to/codex`.
 - Auto-switch reports `No saved session found with ID Continue...`: an older version built the invalid command `codex resume --last "Continue ..."`. Update to the current version; it uses `codex resume <id> "Continue ..."` when an exact id is available, and falls back to `codex exec resume --last "Continue ..."` when no id can be found.
 - Auto-switch resumes the wrong conversation: confirm the installed `cx` is current. Current versions target the exact interrupted session id first and copy that one session file when `sessions` is not shared. If it still happens, run `cx-setup --migrate` or `cx-setup --full --migrate` so all account homes share `sessions`.
 - `cx-setup --remove free` still auto-selects free: update to the current version. Older versions discovered `.codex-account-free.cx-backup-*` backup directories as accounts; current versions skip `.cx-backup-*` backups. Run `cx-setup --list` to confirm the candidates.

@@ -209,7 +209,16 @@ const envBase = {
   CX_AUTO_MAX_SWITCHES: "6",
 };
 
-for (const key of ["CX_ACCOUNT", "CX_ACCOUNT_COUNT", "CX_ACCOUNT_HOMES", "CX_AUTO_RESUME_GOAL", "CX_NO_BYPASS", "CX_NO_TRUST"]) {
+for (const key of [
+  "CODEX_TRUST_ALL",
+  "CX_ACCOUNT",
+  "CX_ACCOUNT_COUNT",
+  "CX_ACCOUNT_HOMES",
+  "CX_AUTO_RESUME_GOAL",
+  "CX_NO_BYPASS",
+  "CX_NO_TRUST",
+  "CX_REAL_CODEX",
+]) {
   delete envBase[key];
 }
 delete envBase.CX_INTERACTIVE_AUTO_EXEC;
@@ -311,7 +320,29 @@ function runVirtualE2e() {
   result = ok("cxa", ["--dry-run", "exec", "hello"]);
   assert.match(result.stderr, /selected account1 \(account1@example\.com\)/);
   assert.match(result.stderr, /exec hello/);
-  assert.match(result.stderr, /trust_level="trusted"/);
+  assert.doesNotMatch(result.stderr, /trust_level="trusted"/);
+
+  clearRecords();
+  ok("cx", ["--account", "1", "exec", "persist trust"]);
+  assert.match(
+    fs.readFileSync(path.join(root, ".codex-account1", "config.toml"), "utf8"),
+    new RegExp(`\\[projects\\.${JSON.stringify(fs.realpathSync.native(root)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]`),
+  );
+  assert.equal(readRecords().filter((entry) => entry.type === "run").length, 1);
+
+  const directCodexHome = path.join(root, "direct-codex-home");
+  const directTarget = fs.mkdtempSync(path.join(root, "direct-cd-"));
+  clearRecords();
+  ok("codex", ["--cd", directTarget, "--version"], { CODEX_HOME: directCodexHome });
+  const directConfig = fs.readFileSync(path.join(directCodexHome, "config.toml"), "utf8");
+  assert.match(
+    directConfig,
+    new RegExp(`\\[projects\\.${JSON.stringify(fs.realpathSync.native(root)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]`),
+  );
+  assert.match(
+    directConfig,
+    new RegExp(`\\[projects\\.${JSON.stringify(fs.realpathSync.native(directTarget)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]`),
+  );
 
   result = ok("cx", ["--dry-run", "exec", "retry probe"], {
     FAKE_LIMIT_FAIL_ONCE: "1",

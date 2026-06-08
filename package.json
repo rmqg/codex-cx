@@ -1,6 +1,6 @@
 {
   "name": "codex-cx",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "Small account-switching wrappers for the OpenAI Codex CLI.",
   "license": "GPL-3.0-only",
   "author": "rmqg",
@@ -24,7 +24,7 @@
     "docs"
   ],
   "scripts": {
-    "test": "node --check bin/cx && node --check bin/cx-setup && sh -n bin/cxa && sh -n bin/cxr && node test/select-account.test.js && node test/setup.test.js && node test/virtual-e2e.test.js"
+    "test": "node --check bin/cx && node --check bin/codex && node --check bin/cx-setup && sh -n bin/cxa && sh -n bin/cxr && node test/select-account.test.js && node test/setup.test.js && node test/virtual-e2e.test.js"
   },
   "engines": {
     "node": ">=18"

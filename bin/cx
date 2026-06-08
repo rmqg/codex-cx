@@ -149,13 +149,20 @@ Environment:
   CX_ACCOUNT_COUNT=N                            Probe ~/.codex-account1..N.
   CX_ACCOUNT_HOMES=/path/a,/path/b              Explicit comma-separated CODEX_HOME list.
   CX_NO_BYPASS=1                                Do not add the bypass flag.
-  CX_NO_TRUST=1                                 Do not inject project trust for the current workdir.
+  CX_NO_TRUST=1                                 Do not write project trust for the current workdir.
   CX_AUTO_RESUME_GOAL=0                         Do not reactivate paused/limited goals before resume.
   CX_API_KEY_MODE=prefer|fallback               API-key account selection mode. Default: fallback.
   CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
   CX_LIMIT_RETRIES=2                            Rate-limit probe attempts per account.
   CX_AUTO_MAX_SWITCHES=5                        Max automatic account switches per run.
   CX_INTERACTIVE_AUTO_EXEC=1                    Resume interrupted interactive turns in exec mode.
+
+Behavior:
+  cx launches the real Codex CLI with the selected CODEX_HOME, preserving
+  official Codex behavior while adding local account selection and handoff.
+  By default it writes the current directory and any --cd/-C target to the
+  selected account's config.toml as projects."<path>".trust_level="trusted".
+  Use --no-trust or CX_NO_TRUST=1 to keep Codex's normal trust prompt.
 `);
 }
 
@@ -607,7 +614,7 @@ function appServerRequest(accountHome, method, params, options = {}) {
   return new Promise((resolve, reject) => {
     const timeoutMs = options.timeoutMs || getRuntimeConfig().timeoutMs;
 
-    const env = { ...process.env, CODEX_HOME: accountHome };
+    const env = { ...process.env, CODEX_HOME: accountHome, CODEX_TRUST_ALL: "0" };
     delete env.CODEX_THREAD_ID;
 
     const child = spawn("codex", ["app-server", "--listen", "stdio://"], {
@@ -917,55 +924,117 @@ function hasSafetyOverride(args) {
   );
 }
 
-function cwdFromOptionArgs(optionArgs, fallback = process.cwd()) {
-  let cwd = fallback;
-  for (let index = 0; index < optionArgs.length; index += 1) {
-    const arg = optionArgs[index];
+function canonicalProjectPath(value, startCwd = process.cwd()) {
+  const expanded = expandHomePath(value);
+  const resolved = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(startCwd, expanded);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function trustedProjectPathsFromCodexArgs(args, startCwd = process.cwd()) {
+  const targets = new Set([canonicalProjectPath(startCwd, startCwd)]);
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") {
+      break;
+    }
     if (arg === "-C" || arg === "--cd") {
-      if (optionArgs[index + 1]) {
-        cwd = expandHomePath(optionArgs[index + 1]);
+      if (args[index + 1]) {
+        targets.add(canonicalProjectPath(args[index + 1], startCwd));
         index += 1;
       }
       continue;
     }
     if (arg.startsWith("--cd=")) {
-      cwd = expandHomePath(arg.slice("--cd=".length));
+      targets.add(canonicalProjectPath(arg.slice("--cd=".length), startCwd));
     }
   }
-  return path.resolve(cwd);
+
+  return [...targets];
 }
 
-function cwdFromCodexArgs(args) {
-  const leading = splitLeadingOptions(args, 0, globalValueOptions);
-  let cwd = cwdFromOptionArgs(leading.options);
-  const command = args[leading.index];
-
-  if (command === "exec" || command === "e") {
-    const execValueOptionsWithCwd = new Set([...execAnalyzeValueOptions, "-C", "--cd", "--add-dir"]);
-    const execOptions = splitLeadingOptions(args, leading.index + 1, execValueOptionsWithCwd);
-    return cwdFromOptionArgs(execOptions.options, cwd);
-  }
-
-  if (command === "resume") {
-    const resumeOptions = splitLeadingOptions(args, leading.index + 1, globalValueOptions);
-    return cwdFromOptionArgs(resumeOptions.options, cwd);
-  }
-
-  return cwd;
+function projectTrustTomlHeader(projectPath) {
+  return `[projects.${JSON.stringify(projectPath)}]`;
 }
 
-function projectTrustConfigArg(codexArgs) {
-  const cwd = cwdFromCodexArgs(codexArgs);
-  return `projects.${JSON.stringify(cwd)}.trust_level="trusted"`;
+function ensureTrustedProjectToml(text, projectPath) {
+  const header = projectTrustTomlHeader(projectPath);
+  const lines = text ? text.replace(/\r\n/g, "\n").split("\n") : [];
+  if (lines.length > 0 && lines.at(-1) === "") {
+    lines.pop();
+  }
+
+  const start = lines.findIndex((line) => line.trim() === header);
+  if (start === -1) {
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push(header, 'trust_level = "trusted"');
+    return { text: `${lines.join("\n")}\n`, changed: true };
+  }
+
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^\s*\[.*\]\s*(?:#.*)?$/.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+
+  for (let index = start + 1; index < end; index += 1) {
+    if (!/^\s*trust_level\s*=/.test(lines[index])) {
+      continue;
+    }
+    if (lines[index].trim() === 'trust_level = "trusted"') {
+      return { text, changed: false };
+    }
+    lines[index] = 'trust_level = "trusted"';
+    return { text: `${lines.join("\n")}\n`, changed: true };
+  }
+
+  lines.splice(start + 1, 0, 'trust_level = "trusted"');
+  return { text: `${lines.join("\n")}\n`, changed: true };
+}
+
+function ensureTrustedProjectsForCodexHome(codexHome, projectPaths, options = {}) {
+  const configPath = path.join(codexHome, "config.toml");
+  const uniqueProjectPaths = [...new Set(projectPaths)];
+  let text = "";
+  try {
+    text = fs.readFileSync(configPath, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  let changed = false;
+  for (const projectPath of uniqueProjectPaths) {
+    const result = ensureTrustedProjectToml(text, projectPath);
+    text = result.text;
+    changed = changed || result.changed;
+  }
+
+  if (changed && !options.dryRun) {
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(configPath, text, { mode: 0o600 });
+  }
+
+  return { changed, configPath, projectPaths: uniqueProjectPaths };
+}
+
+function ensureAccountProjectTrust(account, codexArgs, options = {}) {
+  return ensureTrustedProjectsForCodexHome(account.home, trustedProjectPathsFromCodexArgs(codexArgs), options);
 }
 
 function baseGlobalArgs(options, codexArgs, extraGlobalArgs = []) {
   const globalArgs = [];
   if (!options.noBypass && !hasSafetyOverride(codexArgs)) {
     globalArgs.push("--dangerously-bypass-approvals-and-sandbox");
-  }
-  if (!options.noTrust) {
-    globalArgs.push("-c", projectTrustConfigArg(codexArgs));
   }
   return [...globalArgs, ...extraGlobalArgs];
 }
@@ -1597,7 +1666,7 @@ function logChunkHasUsageLimit(chunk) {
 
 function runCodex(account, commandArgs) {
   return new Promise((resolve) => {
-    const env = { ...process.env, CODEX_HOME: account.home };
+    const env = { ...process.env, CODEX_HOME: account.home, CODEX_TRUST_ALL: "0" };
     delete env.CODEX_THREAD_ID;
 
     const child = spawn("codex", commandArgs, { env, stdio: "inherit" });
@@ -1611,7 +1680,7 @@ function runCodex(account, commandArgs) {
 
 function runCodexMonitored(account, commandArgs, logDir) {
   return new Promise((resolve) => {
-    const env = { ...process.env, CODEX_HOME: account.home };
+    const env = { ...process.env, CODEX_HOME: account.home, CODEX_TRUST_ALL: "0" };
     delete env.CODEX_THREAD_ID;
 
     const child = spawn("codex", commandArgs, { env, stdio: "inherit" });
@@ -1693,6 +1762,9 @@ async function runForced(options, codexArgs, account) {
     return 0;
   }
 
+  if (!options.noTrust) {
+    ensureAccountProjectTrust(account, codexArgs);
+  }
   await resumeGoalIfNeeded(account, codexArgs);
   const result = await runCodex(account, commandArgs);
   if (result.signal && terminating) {
@@ -1742,6 +1814,9 @@ async function runAuto(options, initialArgs) {
       return 0;
     }
 
+    if (!options.noTrust) {
+      ensureAccountProjectTrust(selected.account, codexArgs);
+    }
     ensureRetrySessionAvailable(pendingRetrySession, selected.account);
     await resumeGoalIfNeeded(selected.account, codexArgs);
     const runStartedAt = Date.now() - 2000;
@@ -1804,6 +1879,9 @@ module.exports = {
   extractAccountEmail,
   analyzeCodexArgs,
   compareAccountResults,
+  ensureAccountProjectTrust,
+  ensureTrustedProjectToml,
+  ensureTrustedProjectsForCodexHome,
   isApiKeyAuth,
   isApiKeyResult,
   isUsable,
@@ -1821,5 +1899,6 @@ module.exports = {
   reached,
   shouldResumeGoalStatus,
   selectResult,
+  trustedProjectPathsFromCodexArgs,
   usedPercent,
 };

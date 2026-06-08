@@ -1,0 +1,106 @@
+#!/usr/bin/env node
+"use strict";
+
+const { spawn } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const {
+  ensureTrustedProjectsForCodexHome,
+  trustedProjectPathsFromCodexArgs,
+} = require("./cx");
+
+function realpathOrNull(file) {
+  try {
+    return fs.realpathSync(file);
+  } catch {
+    return null;
+  }
+}
+
+function isExecutable(file) {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function findRealCodex() {
+  if (process.env.CX_REAL_CODEX) {
+    return process.env.CX_REAL_CODEX;
+  }
+
+  const skip = new Set([realpathOrNull(__filename), realpathOrNull(process.argv[1])].filter(Boolean));
+  const pathEntries = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  for (const dir of pathEntries) {
+    const candidate = path.join(dir, "codex");
+    if (!isExecutable(candidate)) {
+      continue;
+    }
+    const real = realpathOrNull(candidate) || path.resolve(candidate);
+    if (skip.has(real)) {
+      continue;
+    }
+    return candidate;
+  }
+
+  throw new Error("real codex binary not found in PATH; set CX_REAL_CODEX=/path/to/codex");
+}
+
+function signalExitCode(signal) {
+  const signals = {
+    SIGHUP: 1,
+    SIGINT: 2,
+    SIGQUIT: 3,
+    SIGILL: 4,
+    SIGTRAP: 5,
+    SIGABRT: 6,
+    SIGBUS: 7,
+    SIGFPE: 8,
+    SIGKILL: 9,
+    SIGUSR1: 10,
+    SIGSEGV: 11,
+    SIGUSR2: 12,
+    SIGPIPE: 13,
+    SIGALRM: 14,
+    SIGTERM: 15,
+  };
+  return 128 + (signals[signal] || 0);
+}
+
+function main() {
+  const args = process.argv.slice(2);
+  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+
+  if (process.env.CODEX_TRUST_ALL !== "0" && process.env.CX_NO_TRUST !== "1") {
+    ensureTrustedProjectsForCodexHome(codexHome, trustedProjectPathsFromCodexArgs(args));
+  }
+
+  const realCodex = findRealCodex();
+  const child = spawn(realCodex, args, { env: process.env, stdio: "inherit" });
+
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.on(signal, () => {
+      if (!child.killed) {
+        child.kill(signal);
+      }
+    });
+  }
+
+  child.on("exit", (code, signal) => {
+    process.exit(code ?? signalExitCode(signal));
+  });
+  child.on("error", (error) => {
+    console.error(`[codex-cx] failed to launch real codex: ${error.message}`);
+    process.exit(127);
+  });
+}
+
+try {
+  main();
+} catch (error) {
+  console.error(`[codex-cx] ${error.message}`);
+  process.exit(1);
+}

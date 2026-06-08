@@ -2,6 +2,18 @@
 
 `codex-cx` 是 OpenAI Codex CLI 的账号切换包装器。它适合多个 ChatGPT/Codex 账号分别使用独立 `CODEX_HOME`，同时共享会话和工作状态的本地环境。
 
+## 为什么用本地切号
+
+`codex-cx` 不做模型请求中转，也不替换官方 Codex 协议。它只是为每个账号设置对应的 `CODEX_HOME`，再启动真实的 Codex CLI。
+
+相比把请求转到中转服务，这种方式的优点是：
+
+- 兼容问题更少：登录、resume、goal、plugin、MCP、图片、sandbox、配置项等仍由官方 Codex CLI 自己处理。
+- 连接更稳定：没有额外的模型流转发层，少一个会断流、改包或不兼容新特性的环节。
+- 原版特性保留更完整：Codex CLI 新增的子命令和参数通常可以直接透传。
+- 无缝衔接更可靠：账号触达额度时，`cx` 会切到下一个账号，并优先恢复刚刚中断的精确 session。
+- 凭据隔离更清楚：每个账号保留自己的 `auth.json`，不会链接、复制或共享登录凭据。
+
 ## 从零开始
 
 1. 安装 Node.js 18 或更新版本。
@@ -51,6 +63,14 @@ cx status
 cxa --dry-run
 ```
 
+可选：如果希望直接运行 `codex` 时也自动信任当前目录，安装 PATH 包装器：
+
+```sh
+cx-setup --install-codex-wrapper --force
+```
+
+这个命令会安装或更新 `~/.local/bin/codex`，请确保 `~/.local/bin` 在 PATH 中位于官方 `codex` 之前。旧 shell 如果缓存了命令路径，运行 `rehash` 或重新开终端。
+
 ## 命令
 
 ```sh
@@ -68,6 +88,7 @@ cxr [extra resume args...]
 cx-setup [options]
 cx-setup --help
 cx-setup --list
+cx-setup --install-codex-wrapper --force
 cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
 cx-setup --remove free
 cx-setup --accounts 2 --prune --migrate
@@ -93,7 +114,16 @@ cx resume --last "$@"
 cx --account work -- --dry-run exec "hello"
 ```
 
-默认情况下，`cx` 会给当前工作根注入临时 Codex 配置 `projects."<cwd>".trust_level="trusted"`。这样自动切到新账号时不会停在 “Do you trust the contents of this directory?” 提示上。这个配置只作用于本次启动，不会写入账号的 `config.toml`；如果你需要保留 Codex 的目录确认提示，可以用 `--no-trust` 或 `CX_NO_TRUST=1` 关闭。
+默认情况下，`cx` 会在启动真实 Codex 前，把当前目录和 `--cd`/`-C` 指向的目录写入所选账号的 `CODEX_HOME/config.toml`：
+
+```toml
+[projects."/some/path"]
+trust_level = "trusted"
+```
+
+这样自动切到新账号时不会停在 “Do you trust the contents of this directory?” 提示上。写入是幂等的，只更新对应项目表的 `trust_level`，不会链接、复制或共享 `auth.json`。如果你需要保留 Codex 的目录确认提示，可以用 `--no-trust` 或 `CX_NO_TRUST=1` 关闭。
+
+安装 `cx-setup --install-codex-wrapper --force` 后，直接运行 `codex` 也会在转交给真实 Codex CLI 前执行同样的目录 trust 写入。`CODEX_TRUST_ALL=0` 或 `CX_NO_TRUST=1` 可以关闭这个包装器行为；如果包装器找不到真实 Codex，可以设置 `CX_REAL_CODEX=/path/to/codex`。
 
 ## 多账号
 
@@ -244,6 +274,7 @@ cx-setup --accounts <N> --full --migrate
 cx-setup --accounts <N> --home ~/.codex-shared --prefix ~/.codex-account --full --migrate
 cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
 cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
+cx-setup --install-codex-wrapper --force
 cx-setup --accounts 2 --prune --migrate
 cx-setup --remove free
 ```
@@ -304,6 +335,8 @@ CX_ACCOUNT_HOMES=name=/path,name2=/path2
 CX_API_KEY_MODE=prefer|fallback
 CX_NO_BYPASS=1
 CX_NO_TRUST=1
+CODEX_TRUST_ALL=0
+CX_REAL_CODEX=/path/to/codex
 CX_AUTO_RESUME_GOAL=0
 CX_LIMIT_TIMEOUT_MS=15000
 CX_LIMIT_RETRIES=2
@@ -321,7 +354,9 @@ CX_INTERACTIVE_AUTO_EXEC=1
 
 默认情况下，`cx` 会在没有显式 sandbox 或 approval 参数时添加 `--dangerously-bypass-approvals-and-sandbox`。可以用 `--no-bypass` 或 `CX_NO_BYPASS=1` 关闭这个默认行为。
 
-默认情况下，`cx` 会信任本次启动使用的工作根，避免多账号自动切换时被目录信任确认打断。可以用 `--no-trust` 或 `CX_NO_TRUST=1` 关闭这个默认行为。
+默认情况下，`cx` 会把本次启动的当前目录和 `--cd`/`-C` 目标写入所选账号的 `config.toml`，避免多账号自动切换时被目录信任确认打断。可以用 `--no-trust` 或 `CX_NO_TRUST=1` 关闭这个默认行为。
+
+安装 `codex` PATH 包装器后，`CODEX_TRUST_ALL=0` 可以只关闭直接 `codex` 的自动 trust 写入；`CX_NO_TRUST=1` 会同时关闭 `cx` 和直接 `codex` 的自动 trust 写入。`CX_REAL_CODEX` 可以指定包装器要转交的真实 Codex CLI 路径。
 
 默认情况下，resume 命令会自动恢复 paused、usage-limited 或 blocked goal。设置 `CX_AUTO_RESUME_GOAL=0` 可以关闭这个预处理。
 
@@ -334,7 +369,9 @@ CX_INTERACTIVE_AUTO_EXEC=1
 - `All candidate accounts are exhausted or unavailable`：所有账号都探测失败、未登录或触达了 5h/weekly 限制。
 - `failed to fetch codex rate limits` 这类探测错误：如果只是临时网络慢，可以调高 `CX_LIMIT_TIMEOUT_MS` 或 `CX_LIMIT_RETRIES`。
 - `cx status` 不显示 active：active 检测依赖 Linux `/proc`。
-- 自动切号后停在目录信任提示：确认正在使用新版 `cx`；新版默认会注入当前工作根的 trust 配置。如果你设置了 `CX_NO_TRUST=1` 或 `--no-trust`，需要取消它或手动信任目录。
+- 自动切号后停在目录信任提示：确认正在使用新版 `cx`；新版默认会把当前目录和 `--cd`/`-C` 目标写入所选账号的 `config.toml`。如果你设置了 `CX_NO_TRUST=1` 或 `--no-trust`，需要取消它或手动信任目录。
+- 直接运行 `codex` 仍弹目录信任提示：运行 `cx-setup --install-codex-wrapper --force`，确认 `command -v codex` 指向 `~/.local/bin/codex`，旧 shell 可执行 `rehash` 或重新打开终端。
+- `codex` 包装器报找不到真实 Codex：确认官方 Codex CLI 在 PATH 中还有另一个 `codex`，或设置 `CX_REAL_CODEX=/path/to/codex`。
 - 自动切号后报 `No saved session found with ID Continue...`：这是旧版生成了非法的 `codex resume --last "Continue ..."`。更新到新版；新版有精确 session id 时会用 `codex resume <id> "Continue ..."`，没有 id 时会降级到 `codex exec resume --last "Continue ..."`。
 - 自动切号后 resume 到错误会话：确认正在使用新版 `cx`；新版会优先恢复刚刚中断的精确 session id，并在未共享 `sessions` 时复制这一条 session 文件。仍有问题时运行 `cx-setup --migrate` 或 `cx-setup --full --migrate`，确保所有账号共享 `sessions`。
 - `cx-setup --remove free` 后仍自动选择 free：更新到新版；旧版会把 `.codex-account-free.cx-backup-*` 备份目录继续当作账号发现，新版会跳过 `.cx-backup-*` 备份。可以用 `cx-setup --list` 确认候选账号。

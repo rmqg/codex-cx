@@ -50,6 +50,14 @@ function cleanEnv(extra = {}) {
 }
 
 {
+  const options = parseArgs(["--install-codex-wrapper", "--codex-wrapper-bin", "~/bin", "--force"]);
+
+  assert.equal(options.installCodexWrapper, true);
+  assert.match(options.codexWrapperBin, /\/bin$/);
+  assert.equal(options.force, true);
+}
+
+{
   const homes = parseHomes("work=~/codex-work,backup=/tmp/codex-backup,~/codex-third");
 
   assert.equal(homes[0].name, "work");
@@ -135,8 +143,29 @@ assert.throws(
 
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Add one more numbered account/);
+  assert.match(result.stdout, /Install the optional codex PATH wrapper/);
   assert.match(result.stdout, /Create numbered accounts with full shared state/);
   assert.match(result.stdout, /never links or shares auth\.json/);
+}
+
+{
+  const setup = path.resolve(__dirname, "../bin/cx-setup");
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cx-setup-wrapper-"));
+  const wrapperBin = path.join(tempHome, "bin");
+  const result = spawnSync(
+    process.execPath,
+    [setup, "--install-codex-wrapper", "--codex-wrapper-bin", wrapperBin, "--force"],
+    {
+      env: cleanEnv({ HOME: tempHome }),
+      encoding: "utf8",
+    },
+  );
+
+  const installed = path.join(wrapperBin, "codex");
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.lstatSync(installed).isSymbolicLink(), true);
+  assert.equal(path.resolve(wrapperBin, fs.readlinkSync(installed)), path.resolve(__dirname, "../bin/codex"));
+  fs.rmSync(tempHome, { recursive: true, force: true });
 }
 
 {

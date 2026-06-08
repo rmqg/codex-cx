@@ -44,7 +44,10 @@ function usage() {
 What it does:
   cx-setup creates account CODEX_HOME directories and links shared workspace
   state from one shared Codex home. It never links or shares auth.json; each
-  account keeps its own login or API-key credentials.
+  account keeps its own login or API-key credentials. codex-cx keeps requests
+  on the official Codex CLI path instead of relaying model traffic, so original
+  Codex features remain available and account handoff can resume interrupted
+  sessions with fewer proxy compatibility issues.
 
 Common workflows:
   List discovered/configured accounts without changing files:
@@ -73,6 +76,10 @@ Common workflows:
   Create an API-key account:
     printf '%s' "$OPENAI_API_KEY" | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
 
+  Install the optional codex PATH wrapper:
+    cx-setup --install-codex-wrapper --force
+    codex --version
+
 Options:
   --accounts N          Select numbered homes ~/.codex-account1..N. Re-run with
                         a larger N to add another numbered account; lowering N
@@ -99,6 +106,11 @@ Options:
   --remove SELECTOR     Move a discovered/configured account home to a backup.
   --prune               With --accounts/--homes, move extra discovered homes to backups.
   --api-key-mode MODE   Persist local auto-selection mode: prefer or fallback.
+  --install-codex-wrapper
+                        Install/update ~/.local/bin/codex so direct codex runs
+                        persist project trust before launching the real Codex CLI.
+  --codex-wrapper-bin DIR
+                        Directory for --install-codex-wrapper. Default: ~/.local/bin.
   --home DIR            Shared Codex home. Default: ~/.codex.
   --prefix PREFIX       Prefix for numbered account homes. Default: ~/.codex-account.
   --full                Also share Codex logs, goals, memories, and state sqlite files.
@@ -152,6 +164,8 @@ function parseArgs(argv) {
     remove: [],
     prune: false,
     apiKeyMode: null,
+    installCodexWrapper: false,
+    codexWrapperBin: path.join(home, ".local", "bin"),
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -202,6 +216,18 @@ function parseArgs(argv) {
     }
     if (arg === "--prune") {
       options.prune = true;
+      continue;
+    }
+    if (arg === "--install-codex-wrapper") {
+      options.installCodexWrapper = true;
+      continue;
+    }
+    if (arg === "--codex-wrapper-bin") {
+      options.codexWrapperBin = expandHomePath(requiredValue(argv, ++i, arg));
+      continue;
+    }
+    if (arg.startsWith("--codex-wrapper-bin=")) {
+      options.codexWrapperBin = expandHomePath(arg.slice("--codex-wrapper-bin=".length));
       continue;
     }
     if (arg === "--list" || arg === "--list-accounts") {
@@ -636,6 +662,52 @@ function writeLocalConfigPatch(values, options) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
   console.log(`wrote ${target}`);
+}
+
+function realpathOrNull(file) {
+  try {
+    return fs.realpathSync(file);
+  } catch {
+    return null;
+  }
+}
+
+function isSameFile(left, right) {
+  const leftReal = realpathOrNull(left);
+  const rightReal = realpathOrNull(right);
+  return Boolean(leftReal && rightReal && leftReal === rightReal);
+}
+
+function installCodexWrapper(options) {
+  const source = path.join(__dirname, "codex");
+  const target = path.join(options.codexWrapperBin, "codex");
+  if (!fs.existsSync(source)) {
+    throw new Error(`codex wrapper source is missing: ${source}`);
+  }
+
+  const existing = fs.lstatSync(target, { throwIfNoEntry: false });
+  if (existing && isSameFile(target, source)) {
+    console.log(`ok ${target} -> ${source}`);
+    return;
+  }
+  if (existing?.isDirectory()) {
+    throw new Error(`${target} is a directory`);
+  }
+  if (existing && !options.force) {
+    throw new Error(`${target} exists; use --force to replace it`);
+  }
+
+  if (options.dryRun) {
+    console.log(`[dry-run] ln -s ${source} ${target}`);
+    return;
+  }
+
+  fs.mkdirSync(options.codexWrapperBin, { recursive: true });
+  if (existing) {
+    fs.unlinkSync(target);
+  }
+  fs.symlinkSync(source, target);
+  console.log(`installed codex wrapper ${target} -> ${source}`);
 }
 
 function normalizeApiKeyMode(value, label = "api key mode") {
@@ -1136,7 +1208,7 @@ async function setup(options) {
   const shouldConfigureHomes =
     hasConfiguredHomes ||
     options.prune ||
-    (!options.apiKeyMode && options.remove.length === 0 && !options.list);
+    (!options.apiKeyMode && !options.installCodexWrapper && options.remove.length === 0 && !options.list);
   const homes = shouldConfigureHomes || options.list || options.remove.length > 0
     ? validateAccounts(accountHomes(options), sharedHome)
     : [];
@@ -1155,6 +1227,9 @@ async function setup(options) {
 
   if (options.apiKeyMode) {
     writeLocalConfigPatch({ apiKeyMode: options.apiKeyMode }, options);
+  }
+  if (options.installCodexWrapper) {
+    installCodexWrapper(options);
   }
 
   for (const selector of options.remove) {
@@ -1186,7 +1261,7 @@ async function setup(options) {
   const remainingHomes = homes.filter((account) => !removedHomes.has(account.home));
 
   if (remainingHomes.length < 1) {
-    if (options.apiKeyMode || uniqueRemoveTargets.length > 0) {
+    if (options.apiKeyMode || options.installCodexWrapper || uniqueRemoveTargets.length > 0) {
       return;
     }
     throw new Error("No account homes selected. Use --accounts <N> on a new machine, or --homes name=/path,...");
@@ -1247,6 +1322,7 @@ module.exports = {
   defaultSharedItems,
   discoverAccountHomes,
   fullSharedItems,
+  installCodexWrapper,
   normalizeApiKeyCheckMode,
   normalizeApiKeyMode,
   normalizeOpenAiBaseUrl,
