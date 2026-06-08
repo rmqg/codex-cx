@@ -32,6 +32,8 @@ cx-setup --install-codex-wrapper --force
 ```sh
 cx [codex args...]
 cx --no-trust [codex args...]
+cx status
+cx quota
 cxa [codex args...]
 cxr [extra resume args...]
 cx-setup [options]

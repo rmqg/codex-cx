@@ -140,6 +140,7 @@ function usage() {
   cx auto [codex args...]                    Same as cx without --account.
   cx --account <selector> [codex args...]    Run only with one selected account.
   cx status
+  cx quota|limits|remaining                  Print remaining quota for all accounts.
   cx --dry-run [codex args...]
   cx --no-bypass [codex args...]
   cx --no-trust [codex args...]
@@ -171,6 +172,7 @@ function parseArgs(argv) {
   const options = {
     auto: false,
     status: false,
+    quota: false,
     dryRun: false,
     noBypass: process.env.CX_NO_BYPASS === "1",
     noTrust: process.env.CX_NO_TRUST === "1",
@@ -194,6 +196,17 @@ function parseArgs(argv) {
     }
     if (arg === "status" || arg === "--status") {
       options.status = true;
+      continue;
+    }
+    if (
+      arg === "quota" ||
+      arg === "limits" ||
+      arg === "remaining" ||
+      arg === "--quota" ||
+      arg === "--limits" ||
+      arg === "--remaining"
+    ) {
+      options.quota = true;
       continue;
     }
     if (arg === "--dry-run") {
@@ -884,6 +897,30 @@ function formatPercent(value) {
   return `${Number.isFinite(value) ? value : 100}%`;
 }
 
+function remainingPercent(result, key) {
+  if (!result?.ok || !result.limits) {
+    return null;
+  }
+
+  const reason = normalizeReachedReason(reached(result.limits));
+  if (key === "primary" && reason === "5h>=100%") {
+    return 0;
+  }
+  if (key === "secondary" && reason === "weekly>=100%") {
+    return 0;
+  }
+
+  const used = rawUsedPercent(result.limits, key);
+  if (!Number.isFinite(used)) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, 100 - used));
+}
+
+function formatOptionalPercent(value) {
+  return Number.isFinite(value) ? `${value}%` : "ERR";
+}
+
 function printStatus(results) {
   const { apiKeyMode } = getRuntimeConfig();
   console.error(
@@ -900,6 +937,19 @@ function printStatus(results) {
     const hit = limitExhaustedReason(result) || "-";
     console.error(
       `${result.account.name.padEnd(9)} ${active.padEnd(8)} ${auth.padEnd(9)} ${primary.padEnd(9)} ${secondary.padEnd(13)} ${String(hit).padEnd(9)} ${result.account.home}`,
+    );
+  }
+}
+
+function printQuota(results) {
+  console.error("Account   auth      5h remaining   weekly remaining   reached   home");
+  for (const result of results) {
+    const auth = result.authMode === "apikey" ? "api-key" : result.authMode === "account" ? "account" : "-";
+    const primary = formatOptionalPercent(remainingPercent(result, "primary"));
+    const secondary = formatOptionalPercent(remainingPercent(result, "secondary"));
+    const hit = limitExhaustedReason(result) || "-";
+    console.error(
+      `${result.account.name.padEnd(9)} ${auth.padEnd(9)} ${primary.padEnd(14)} ${secondary.padEnd(18)} ${String(hit).padEnd(9)} ${result.account.home}`,
     );
   }
 }
@@ -1791,6 +1841,11 @@ async function runAuto(options, initialArgs) {
     printStatus(results);
     return 0;
   }
+  if (options.quota) {
+    const results = await probeAccounts(exhausted);
+    printQuota(results);
+    return 0;
+  }
 
   for (;;) {
     const results = await probeAccounts(exhausted);
@@ -1891,6 +1946,7 @@ module.exports = {
   limitExhaustedReason,
   logChunkHasUsageLimit,
   readSessionMeta,
+  remainingPercent,
   normalizeReachedReason,
   normalizeApiKeyMode,
   retryPlanAfterRateLimit,

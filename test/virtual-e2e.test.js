@@ -305,6 +305,11 @@ function runVirtualE2e() {
   let result = ok("cx", ["status"]);
   assert.match(result.stderr, /account4\s+-\s+account\s+100%\s+49%\s+5h>=100%/);
 
+  result = ok("cx", ["quota"]);
+  assert.match(result.stderr, /Account\s+auth\s+5h remaining\s+weekly remaining/);
+  assert.match(result.stderr, /account1\s+account\s+96%\s+99%\s+-/);
+  assert.match(result.stderr, /account4\s+account\s+0%\s+51%\s+5h>=100%/);
+
   const holder = spawn(path.join(fakeBin, "codex"), ["hold"], {
     env: { ...envBase, CODEX_HOME: path.join(root, ".codex-account2") },
     stdio: "ignore",

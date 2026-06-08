@@ -79,6 +79,7 @@ cx exec "prompt"
 cx auto [codex args...]
 cx --account work [codex args...]
 cx status
+cx quota
 cx --dry-run [codex args...]
 cx --no-bypass [codex args...]
 cx --no-trust [codex args...]
@@ -107,6 +108,8 @@ cx resume --last "$@"
 ```
 
 `cx --account work ...` is the explicit-account path. It uses only that account and does not probe usage, sort accounts, or auto-switch. Without an explicit account, `cx` uses the same auto-switching path as `cxa`.
+
+`cx status` prints every account's active state, auth type, 5h/weekly used percentages, reached-limit reason, and home. `cx quota`, `cx limits`, and `cx remaining` print every account's 5h/weekly remaining percentages for a quick quota check.
 
 Use `--` when an argument must be passed to Codex even though it looks like a `cx` wrapper option:
 
@@ -139,6 +142,7 @@ On a new machine, create those homes first with `cx-setup --accounts <N>`. You c
 
 ```sh
 CX_ACCOUNT_COUNT=<N> cx status
+CX_ACCOUNT_COUNT=<N> cx quota
 CX_ACCOUNT_COUNT=<N> cxa
 ```
 
