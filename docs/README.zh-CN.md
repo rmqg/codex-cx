@@ -109,7 +109,7 @@ cx resume --last "$@"
 
 `cx --account work ...` 是显式指定账号路径：只使用这个账号，不探测额度、不排序、不自动切号。不显式指定账号时，`cx` 走和 `cxa` 相同的自动切号路径。
 
-`cx status` 会打印所有账号的 active 状态、认证类型、5h/weekly 已用百分比、触达限制原因和 home。`cx quota`、`cx limits`、`cx remaining` 会打印所有账号的 5h/weekly 剩余百分比，适合快速看每个账号还剩多少额度。
+`cx status` 会打印所有账号的 active 状态、认证类型、5h/weekly 已用百分比、触达限制原因和 home。`cx quota`、`cx limits`、`cx remaining` 会按账号分成多行，用 ASCII 进度条打印 5h/weekly 剩余百分比，适合快速看每个账号还剩多少额度。
 
 如果某个参数必须原样传给 Codex，但它看起来像 `cx` 包装器参数，可以用 `--` 分隔：
 

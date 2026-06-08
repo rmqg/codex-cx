@@ -11,6 +11,7 @@ const packageVersion = readPackageVersion();
 
 const weeklySimilarDelta = 5;
 const primarySimilarDelta = 20;
+const quotaBarWidth = 20;
 const rateLimitTextPattern =
   /(?:usage limits?|out of credits|credits_depleted|usage_limit_reached|rate_limit_reached|spend cap|insufficient_quota|requires_payment_method|exceeded your current quota|429|Too Many Requests)/i;
 const rateLimitReasonPattern =
@@ -140,7 +141,7 @@ function usage() {
   cx auto [codex args...]                    Same as cx without --account.
   cx --account <selector> [codex args...]    Run only with one selected account.
   cx status
-  cx quota|limits|remaining                  Print remaining quota for all accounts.
+  cx quota|limits|remaining                  Print multi-line quota bars for all accounts.
   cx --dry-run [codex args...]
   cx --no-bypass [codex args...]
   cx --no-trust [codex args...]
@@ -921,6 +922,15 @@ function formatOptionalPercent(value) {
   return Number.isFinite(value) ? `${value}%` : "ERR";
 }
 
+function formatProgressPercent(value, width = quotaBarWidth) {
+  if (!Number.isFinite(value)) {
+    return `[${"?".repeat(width)}] ERR`;
+  }
+  const clamped = Math.max(0, Math.min(100, value));
+  const filled = Math.round((clamped / 100) * width);
+  return `[${"#".repeat(filled)}${"-".repeat(width - filled)}] ${formatOptionalPercent(clamped)}`;
+}
+
 function printStatus(results) {
   const { apiKeyMode } = getRuntimeConfig();
   console.error(
@@ -942,15 +952,16 @@ function printStatus(results) {
 }
 
 function printQuota(results) {
-  console.error("Account   auth      5h remaining   weekly remaining   reached   home");
+  console.error("Quota remaining:");
   for (const result of results) {
     const auth = result.authMode === "apikey" ? "api-key" : result.authMode === "account" ? "account" : "-";
-    const primary = formatOptionalPercent(remainingPercent(result, "primary"));
-    const secondary = formatOptionalPercent(remainingPercent(result, "secondary"));
+    const primary = formatProgressPercent(remainingPercent(result, "primary"));
+    const secondary = formatProgressPercent(remainingPercent(result, "secondary"));
     const hit = limitExhaustedReason(result) || "-";
-    console.error(
-      `${result.account.name.padEnd(9)} ${auth.padEnd(9)} ${primary.padEnd(14)} ${secondary.padEnd(18)} ${String(hit).padEnd(9)} ${result.account.home}`,
-    );
+    console.error(`${result.account.name} [${auth}]${hit === "-" ? "" : ` (${hit})`}`);
+    console.error(`  5h     ${primary}`);
+    console.error(`  weekly ${secondary}`);
+    console.error(`  home   ${result.account.home}`);
   }
 }
 
@@ -1937,6 +1948,7 @@ module.exports = {
   ensureAccountProjectTrust,
   ensureTrustedProjectToml,
   ensureTrustedProjectsForCodexHome,
+  formatProgressPercent,
   isApiKeyAuth,
   isApiKeyResult,
   isUsable,

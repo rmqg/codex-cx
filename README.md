@@ -33,7 +33,7 @@ cx-setup --install-codex-wrapper --force
 cx [codex args...]
 cx --no-trust [codex args...]
 cx status
-cx quota
+cx quota  # multi-line remaining quota bars
 cxa [codex args...]
 cxr [extra resume args...]
 cx-setup [options]

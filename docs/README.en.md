@@ -109,7 +109,7 @@ cx resume --last "$@"
 
 `cx --account work ...` is the explicit-account path. It uses only that account and does not probe usage, sort accounts, or auto-switch. Without an explicit account, `cx` uses the same auto-switching path as `cxa`.
 
-`cx status` prints every account's active state, auth type, 5h/weekly used percentages, reached-limit reason, and home. `cx quota`, `cx limits`, and `cx remaining` print every account's 5h/weekly remaining percentages for a quick quota check.
+`cx status` prints every account's active state, auth type, 5h/weekly used percentages, reached-limit reason, and home. `cx quota`, `cx limits`, and `cx remaining` print each account as a small multi-line block with ASCII progress bars for 5h/weekly remaining percentages.
 
 Use `--` when an argument must be passed to Codex even though it looks like a `cx` wrapper option:
 
