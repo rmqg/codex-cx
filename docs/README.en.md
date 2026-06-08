@@ -97,6 +97,7 @@ cx quota
 The total is not a simple average; when Codex reports each window capacity, cx weights the remaining quota by that capacity, which fits mixed account types with different limits.
 If a window has no capacity field, cx counts it as one equal-weight unit and marks the Total title with fallback.
 If Codex does not report a reset time, that window shows `reset unknown`.
+Quota probes wait up to 30s per account, try 3 times, and wait 1500ms between failed attempts by default; tune the `CX_LIMIT_*` variables below for unstable networks.
 
 ## Daily Use
 
@@ -350,11 +351,14 @@ Advanced variables:
 CODEX_TRUST_ALL=0
 CX_REAL_CODEX=/path/to/codex
 CX_AUTO_RESUME_GOAL=0
-CX_LIMIT_TIMEOUT_MS=15000
-CX_LIMIT_RETRIES=2
+CX_LIMIT_TIMEOUT_MS=30000
+CX_LIMIT_RETRIES=3
+CX_LIMIT_RETRY_DELAY_MS=1500
 CX_AUTO_MAX_SWITCHES=5
 CX_INTERACTIVE_AUTO_EXEC=1
 ```
+
+`CX_LIMIT_TIMEOUT_MS` controls the per-probe timeout, `CX_LIMIT_RETRIES` controls attempts per account, and `CX_LIMIT_RETRY_DELAY_MS` controls the wait before retrying a failed probe.
 
 ## How Auto-Switch Continues Work
 

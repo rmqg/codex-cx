@@ -169,8 +169,9 @@ Environment:
   CX_COLOR=1|0                                  Force-enable or disable quota colors.
   CX_AUTO_RESUME_GOAL=0                         Do not reactivate paused/limited goals before resume.
   CX_API_KEY_MODE=prefer|fallback               API-key account selection mode. Default: fallback.
-  CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
-  CX_LIMIT_RETRIES=2                            Rate-limit probe attempts per account.
+  CX_LIMIT_TIMEOUT_MS=30000                     Rate-limit probe timeout.
+  CX_LIMIT_RETRIES=3                            Rate-limit probe attempts per account.
+  CX_LIMIT_RETRY_DELAY_MS=1500                  Delay before retrying a failed probe.
   CX_AUTO_MAX_SWITCHES=5                        Max automatic account switches per run.
   CX_INTERACTIVE_AUTO_EXEC=1                    Resume interrupted interactive turns in exec mode.
 
@@ -281,8 +282,9 @@ function getRuntimeConfig() {
   if (!runtimeConfigCache) {
     const localConfig = readLocalConfig();
     runtimeConfigCache = {
-      timeoutMs: parsePositiveInteger(process.env.CX_LIMIT_TIMEOUT_MS, 15000, "CX_LIMIT_TIMEOUT_MS"),
-      limitRetries: parsePositiveInteger(process.env.CX_LIMIT_RETRIES, 2, "CX_LIMIT_RETRIES"),
+      timeoutMs: parsePositiveInteger(process.env.CX_LIMIT_TIMEOUT_MS, 30000, "CX_LIMIT_TIMEOUT_MS"),
+      limitRetries: parsePositiveInteger(process.env.CX_LIMIT_RETRIES, 3, "CX_LIMIT_RETRIES"),
+      limitRetryDelayMs: parsePositiveInteger(process.env.CX_LIMIT_RETRY_DELAY_MS, 1500, "CX_LIMIT_RETRY_DELAY_MS"),
       autoMaxSwitches: parsePositiveInteger(process.env.CX_AUTO_MAX_SWITCHES, 5, "CX_AUTO_MAX_SWITCHES"),
       apiKeyMode: normalizeApiKeyMode(process.env.CX_API_KEY_MODE || localConfig.apiKeyMode || "fallback", "CX_API_KEY_MODE"),
     };
@@ -715,7 +717,9 @@ async function readRateLimits(account, options = {}) {
     });
   }
 
-  const limitRetries = options.limitRetries || getRuntimeConfig().limitRetries;
+  const runtimeConfig = getRuntimeConfig();
+  const limitRetries = options.limitRetries || runtimeConfig.limitRetries;
+  const limitRetryDelayMs = options.limitRetryDelayMs || runtimeConfig.limitRetryDelayMs;
   let lastError = null;
   for (let attempt = 1; attempt <= limitRetries; attempt += 1) {
     try {
@@ -724,7 +728,7 @@ async function readRateLimits(account, options = {}) {
     } catch (error) {
       lastError = error;
       if (attempt < limitRetries) {
-        await sleep(500);
+        await sleep(limitRetryDelayMs);
       }
     }
   }

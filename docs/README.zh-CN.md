@@ -97,6 +97,7 @@ cx quota
 总剩余不是简单平均；如果 Codex 返回了账号窗口上限，它会按上限加权，适合不同账号类型额度上限不一样的情况。
 如果某个窗口没有上限字段，它会按 1 个单位兜底，并在 Total 标题里标出 fallback。
 如果 Codex 没有返回恢复时间，对应窗口会显示 `reset unknown`。
+额度探测默认每个账号最多等 30 秒，失败后重试 3 次，每次间隔 1500ms；网络不稳时可以调大下面的 `CX_LIMIT_*` 环境变量。
 
 ## 日常使用
 
@@ -350,11 +351,14 @@ NO_COLOR=1
 CODEX_TRUST_ALL=0
 CX_REAL_CODEX=/path/to/codex
 CX_AUTO_RESUME_GOAL=0
-CX_LIMIT_TIMEOUT_MS=15000
-CX_LIMIT_RETRIES=2
+CX_LIMIT_TIMEOUT_MS=30000
+CX_LIMIT_RETRIES=3
+CX_LIMIT_RETRY_DELAY_MS=1500
 CX_AUTO_MAX_SWITCHES=5
 CX_INTERACTIVE_AUTO_EXEC=1
 ```
+
+`CX_LIMIT_TIMEOUT_MS` 控制单次余额探测的超时时间，`CX_LIMIT_RETRIES` 控制每个账号最多尝试几次，`CX_LIMIT_RETRY_DELAY_MS` 控制失败后再试前等待多久。
 
 ## 自动切号怎么继续任务
 

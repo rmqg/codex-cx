@@ -49,6 +49,7 @@ function cleanEnv(extra = {}) {
   delete env.CX_AUTO_MAX_SWITCHES;
   delete env.CX_INTERACTIVE_AUTO_EXEC;
   delete env.CX_LIMIT_TIMEOUT_MS;
+  delete env.CX_LIMIT_RETRY_DELAY_MS;
   delete env.CX_NO_TRUST;
   delete env.CODEX_TRUST_ALL;
   delete env.CX_REAL_CODEX;
@@ -665,6 +666,17 @@ function tokenCountWithoutCredits() {
 
   assert.equal(result.status, 2);
   assert.match(result.stderr, /CX_LIMIT_RETRIES must be a positive integer/);
+}
+
+{
+  const cx = path.resolve(__dirname, "../bin/cx");
+  const result = spawnSync(process.execPath, [cx, "status"], {
+    env: cleanEnv({ CX_LIMIT_RETRY_DELAY_MS: "bad" }),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /CX_LIMIT_RETRY_DELAY_MS must be a positive integer/);
 }
 
 {

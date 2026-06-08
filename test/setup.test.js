@@ -22,6 +22,7 @@ function cleanEnv(extra = {}) {
   delete env.CX_AUTO_MAX_SWITCHES;
   delete env.CX_API_KEY_MODE;
   delete env.CX_LIMIT_TIMEOUT_MS;
+  delete env.CX_LIMIT_RETRY_DELAY_MS;
   return { ...env, ...extra };
 }
 

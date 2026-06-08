@@ -221,6 +221,7 @@ const envBase = {
   FAKE_RECORDS: recordsFile,
   FAKE_LIMITS: JSON.stringify(defaultLimits),
   CX_LIMIT_TIMEOUT_MS: "3000",
+  CX_LIMIT_RETRY_DELAY_MS: "10",
   CX_AUTO_MAX_SWITCHES: "6",
 };
 
