@@ -93,7 +93,9 @@ Check remaining quota:
 cx quota
 ```
 
-`cx quota` prints one block per account, with colored ASCII bars for 5h and weekly remaining quota.
+`cx quota` prints a total first, then one block per account, with colored ASCII bars for 5h and weekly remaining quota.
+The total is not a simple average; when Codex reports each window capacity, cx weights the remaining quota by that capacity, which fits mixed account types with different limits.
+If a window has no capacity field, cx counts it as one equal-weight unit and marks the Total title with fallback.
 
 ## Daily Use
 
@@ -145,7 +147,7 @@ cx [codex args...]              # Run Codex with automatic account selection
 cxa [codex args...]             # Auto mode, same as cx auto
 cxr [extra resume args...]      # Resume the last conversation
 cx status                       # Show account status and used quota
-cx quota                        # Show remaining quota bars
+cx quota                        # Show weighted total and per-account bars
 cx --account 2                  # Use only account 2
 cx --no-trust                   # Do not write project trust automatically
 cx --no-bypass                  # Do not add the bypass flag automatically

@@ -119,8 +119,8 @@ if (args[0] === 'app-server') {
         }
         const x = limits();
         send({ id: msg.id, result: { rateLimitsByLimitId: { codex: {
-          primary: { usedPercent: x.p },
-          secondary: { usedPercent: x.s },
+          primary: { usedPercent: x.p, limit: x.pc },
+          secondary: { usedPercent: x.s, limit: x.sc },
           rateLimitReachedType: x.r || ''
         } } } });
       }
@@ -193,10 +193,10 @@ if (args[0] === 'app-server') {
 fs.writeFileSync(path.join(fakeBin, "codex"), fakeCodex, { mode: 0o755 });
 
 const defaultLimits = {
-  ".codex-account1": { p: 4, s: 1, r: "" },
-  ".codex-account2": { p: 11, s: 2, r: "" },
-  ".codex-account3": { p: 8, s: 1, r: "" },
-  ".codex-account4": { p: 100, s: 49, r: "workspace_owner_credits_depleted" },
+  ".codex-account1": { p: 4, s: 1, pc: 100, sc: 100, r: "" },
+  ".codex-account2": { p: 11, s: 2, pc: 200, sc: 200, r: "" },
+  ".codex-account3": { p: 8, s: 1, pc: 100, sc: 100, r: "" },
+  ".codex-account4": { p: 100, s: 49, pc: 50, sc: 50, r: "workspace_owner_credits_depleted" },
 };
 
 const envBase = {
@@ -307,6 +307,7 @@ function runVirtualE2e() {
 
   result = ok("cx", ["quota"]);
   assert.match(result.stderr, /Quota remaining:/);
+  assert.match(result.stderr, /Total \[weighted by quota capacity\]\n  5h\s+\[################----\] 81\.33%\n  weekly \[###################-\] 93\.22%/);
   assert.match(result.stderr, /account1 \[account\]\n  5h\s+\[###################-\] 96%\n  weekly \[####################\] 99%/);
   assert.match(result.stderr, /account4 \[account\] \(5h>=100%\)\n  5h\s+\[--------------------\] 0%\n  weekly \[##########----------\] 51%/);
 

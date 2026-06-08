@@ -148,7 +148,7 @@ function usage() {
   cx auto [codex args...]                    Same as cx without --account.
   cx --account <selector> [codex args...]    Run only with one selected account.
   cx status
-  cx quota|limits|remaining                  Print multi-line quota bars for all accounts.
+  cx quota|limits|remaining                  Print weighted total and per-account quota bars.
   cx --dry-run [codex args...]
   cx --no-bypass [codex args...]
   cx --no-trust [codex args...]
@@ -760,13 +760,62 @@ function usedPercent(limit, key) {
   return Number.isFinite(value) ? value : 100;
 }
 
-function rawUsedPercent(limit, key) {
-  const camelValue = limit?.[key]?.usedPercent;
-  if (Number.isFinite(camelValue)) {
-    return camelValue;
+function finiteNumber(value) {
+  if (Number.isFinite(value)) {
+    return value;
   }
-  const snakeValue = limit?.[key]?.used_percent;
-  return Number.isFinite(snakeValue) ? snakeValue : null;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const parsed = finiteNumber(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function rawUsedPercent(limit, key) {
+  return firstFiniteNumber(limit?.[key]?.usedPercent, limit?.[key]?.used_percent);
+}
+
+function rawQuotaCapacity(limit, key) {
+  const bucket = limit?.[key];
+  if (!bucket || typeof bucket !== "object") {
+    return null;
+  }
+
+  const capacity = firstFiniteNumber(
+    bucket.limit,
+    bucket.max,
+    bucket.total,
+    bucket.quota,
+    bucket.capacity,
+    bucket.allowance,
+    bucket.allowed,
+    bucket.limitValue,
+    bucket.maxValue,
+    bucket.totalLimit,
+    bucket.quotaLimit,
+    bucket.creditLimit,
+    bucket.limit_value,
+    bucket.max_value,
+    bucket.total_limit,
+    bucket.quota_limit,
+    bucket.credit_limit,
+    bucket.maxRequests,
+    bucket.max_requests,
+    bucket.requestLimit,
+    bucket.request_limit,
+  );
+
+  return Number.isFinite(capacity) && capacity > 0 ? capacity : null;
 }
 
 function reached(limit) {
@@ -934,7 +983,12 @@ function remainingPercent(result, key) {
 }
 
 function formatOptionalPercent(value) {
-  return Number.isFinite(value) ? `${value}%` : "ERR";
+  if (!Number.isFinite(value)) {
+    return "ERR";
+  }
+  const rounded = Math.round(value * 100) / 100;
+  const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/u, "").replace(/\.$/u, "");
+  return `${text}%`;
 }
 
 function shouldUseColor(stream = process.stderr) {
@@ -981,6 +1035,64 @@ function formatProgressPercent(value, width = quotaBarWidth, options = {}) {
   );
 }
 
+function quotaWindowSummary(results, key) {
+  let totalCapacity = 0;
+  let remainingCapacity = 0;
+  let accountCount = 0;
+  let weightedCount = 0;
+  let fallbackCount = 0;
+
+  for (const result of results) {
+    const remaining = remainingPercent(result, key);
+    if (!Number.isFinite(remaining)) {
+      continue;
+    }
+
+    const capacity = rawQuotaCapacity(result.limits, key);
+    const weight = Number.isFinite(capacity) ? capacity : 1;
+    if (Number.isFinite(capacity)) {
+      weightedCount += 1;
+    } else {
+      fallbackCount += 1;
+    }
+
+    accountCount += 1;
+    totalCapacity += weight;
+    remainingCapacity += (remaining / 100) * weight;
+  }
+
+  return {
+    percent: totalCapacity > 0 ? (remainingCapacity / totalCapacity) * 100 : null,
+    accountCount,
+    weightedCount,
+    fallbackCount,
+  };
+}
+
+function quotaTotalSummary(results) {
+  return {
+    primary: quotaWindowSummary(results, "primary"),
+    secondary: quotaWindowSummary(results, "secondary"),
+  };
+}
+
+function quotaTotalLabel(summary) {
+  const windows = summary.primary.accountCount + summary.secondary.accountCount;
+  if (windows < 1) {
+    return "Total";
+  }
+
+  const weighted = summary.primary.weightedCount + summary.secondary.weightedCount;
+  const fallback = summary.primary.fallbackCount + summary.secondary.fallbackCount;
+  if (weighted > 0 && fallback > 0) {
+    return "Total [weighted; missing capacities use equal weight]";
+  }
+  if (weighted > 0) {
+    return "Total [weighted by quota capacity]";
+  }
+  return "Total [equal-weight fallback]";
+}
+
 function printStatus(results) {
   const { apiKeyMode } = getRuntimeConfig();
   console.error(
@@ -1003,6 +1115,10 @@ function printStatus(results) {
 
 function printQuota(results) {
   console.error("Quota remaining:");
+  const total = quotaTotalSummary(results);
+  console.error(quotaTotalLabel(total));
+  console.error(`  5h     ${formatProgressPercent(total.primary.percent)}`);
+  console.error(`  weekly ${formatProgressPercent(total.secondary.percent)}`);
   for (const result of results) {
     const auth = result.authMode === "apikey" ? "api-key" : result.authMode === "account" ? "account" : "-";
     const primary = formatProgressPercent(remainingPercent(result, "primary"));

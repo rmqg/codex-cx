@@ -42,6 +42,9 @@ cx status
 cx quota
 ```
 
+`cx quota` shows a weighted total first, then 5h and weekly bars for each account.
+When Codex does not report a capacity for a quota window, that window is counted as one equal-weight unit and the total label says so.
+
 Run Codex:
 
 ```sh

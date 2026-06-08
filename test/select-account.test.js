@@ -349,6 +349,7 @@ function tokenCountWithoutCredits() {
 
 {
   assert.equal(formatProgressPercent(96, 20, { colors: false }), "[###################-] 96%");
+  assert.equal(formatProgressPercent(81.333333, 20, { colors: false }), "[################----] 81.33%");
   assert.match(formatProgressPercent(96, 20, { colors: true }), /\x1b\[32m#+\x1b\[0m/);
   assert.match(formatProgressPercent(10, 20, { colors: true }), /\x1b\[31m#+\x1b\[0m/);
   assert.match(formatProgressPercent(null, 20, { colors: true }), /\x1b\[33m\?+\x1b\[0m/);
