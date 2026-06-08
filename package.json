@@ -1,6 +1,6 @@
 {
   "name": "codex-multi-account",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Small account-switching wrappers for the OpenAI Codex CLI.",
   "license": "GPL-3.0-only",
   "author": "rmqg",

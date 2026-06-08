@@ -50,6 +50,14 @@ What it does:
   sessions with fewer proxy compatibility issues.
 
 Common workflows:
+  First time with 3 accounts:
+    cx-setup --accounts 3 --migrate
+    CODEX_HOME="$HOME/.codex-account1" codex login
+    CODEX_HOME="$HOME/.codex-account2" codex login
+    CODEX_HOME="$HOME/.codex-account3" codex login
+    cx status
+    cx quota
+
   List discovered/configured accounts without changing files:
     cx-setup --list
 

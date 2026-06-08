@@ -1,17 +1,15 @@
 # codex-multi-account
 
-Small account-switching wrappers for the OpenAI Codex CLI.
+Use multiple Codex accounts locally without changing how the official Codex CLI works.
 
-`codex-multi-account` keeps you on the official Codex CLI path while rotating local
-`CODEX_HOME` account directories. Compared with relay/proxy workflows, this
-keeps original Codex features available, reduces compatibility bugs, avoids
-proxy stream instability, and can continue interrupted work seamlessly when an
-account hits usage limits.
+The installed commands are still short:
 
-## Documentation
-
-- [English](docs/README.en.md)
-- [简体中文](docs/README.zh-CN.md)
+```sh
+cx        # run Codex with automatic account selection
+cxa       # same idea, explicit auto mode
+cxr       # resume the last conversation
+cx-setup  # create account folders and shared state
+```
 
 ## Install
 
@@ -19,30 +17,50 @@ account hits usage limits.
 npm install -g github:rmqg/codex-multi-account
 ```
 
-Run the same command again to update an existing global install.
+Update with the same command.
 
-Optional direct `codex` wrapper for automatic project trust:
+## First Setup
+
+Create account folders. Replace `3` with your account count.
 
 ```sh
-cx-setup --install-codex-wrapper --force
+cx-setup --accounts 3 --migrate
 ```
 
-## Commands
+Log in once per account:
 
 ```sh
-cx [codex args...]
-cx --no-trust [codex args...]
+CODEX_HOME="$HOME/.codex-account1" codex login
+CODEX_HOME="$HOME/.codex-account2" codex login
+CODEX_HOME="$HOME/.codex-account3" codex login
+```
+
+Check everything:
+
+```sh
 cx status
-cx quota  # colored multi-line remaining quota bars
-cxa [codex args...]
-cxr [extra resume args...]
-cx-setup [options]
-cx-setup --help
-cx-setup --list
-cx-setup --install-codex-wrapper --force
-cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
-cx-setup --remove free
-cx-setup --accounts 2 --prune --migrate
+cx quota
 ```
+
+Run Codex:
+
+```sh
+cxa
+cx exec "explain this repo"
+cxr
+```
+
+## Optional
+
+Install the direct `codex` wrapper so plain `codex` also auto-trusts the current project:
+
+```sh
+cx-setup --install-codex-wrapper --force
+```
+
+## Docs
+
+- [English guide](docs/README.en.md)
+- [中文教程](docs/README.zh-CN.md)
 
 License: GPL-3.0-only.

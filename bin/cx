@@ -153,6 +153,13 @@ function usage() {
   cx --no-bypass [codex args...]
   cx --no-trust [codex args...]
 
+Beginner path:
+  1. Create account folders: cx-setup --accounts 3 --migrate
+  2. Log in each account:   CODEX_HOME="$HOME/.codex-account1" codex login
+  3. Check accounts:        cx status
+  4. Check remaining quota: cx quota
+  5. Start Codex:           cxa
+
 Environment:
   CX_ACCOUNT=1|account1|work                    Same as --account.
   CX_ACCOUNT_COUNT=N                            Probe ~/.codex-account1..N.

@@ -1,248 +1,219 @@
-# codex-multi-account
+# codex-multi-account Beginner Guide
 
-`codex-multi-account` provides account-switching wrappers for the OpenAI Codex CLI. It is meant for local setups where each ChatGPT/Codex account has its own `CODEX_HOME`, while conversation sessions and other workspace state can be shared.
+This tool helps you use multiple Codex accounts on one machine.
 
-## Why Local Switching
+You still use the official Codex CLI. `codex-multi-account` only adds a local account layer:
 
-`codex-multi-account` does not proxy model requests or replace the official Codex protocol. It sets the right `CODEX_HOME` for each account and then launches the real Codex CLI.
+- It creates one `CODEX_HOME` folder per account.
+- It selects a usable account before launching Codex.
+- When one account hits usage limits, it tries to switch to another account and continue the same task.
 
-Compared with relay/proxy workflows, this has a few practical advantages:
+It is not a model proxy. It does not forward model traffic. It does not share your `auth.json` login files.
 
-- Fewer compatibility bugs: login, resume, goals, plugins, MCP, images, sandboxing, and config remain handled by the official Codex CLI.
-- More stable connections: there is no extra stream-forwarding layer that can drop, rewrite, or lag behind new Codex behavior.
-- Better original feature coverage: new Codex CLI subcommands and options usually pass through without wrapper changes.
-- More seamless handoff: when one account hits usage limits, `cx` switches accounts and targets the exact interrupted session first.
-- Clearer credential isolation: every account keeps its own `auth.json`; credentials are not linked, copied, or shared.
+## When To Use It
 
-## Quick Start
+Use it if:
 
-1. Install Node.js 18 or newer.
-2. Install the OpenAI Codex CLI and confirm `codex --version` works.
-3. Install `codex-multi-account`:
+- You have multiple ChatGPT/Codex accounts.
+- You want those accounts to share conversation sessions.
+- You want official Codex CLI behavior, not a relay/proxy workflow.
+- You often hit usage limits and want smoother account handoff.
+
+You probably do not need it if:
+
+- You only use one account.
+- You only need one OpenAI API key and do not need account switching.
+
+## Before Installing
+
+Check that Node.js and Codex are installed:
+
+```sh
+node --version
+codex --version
+```
+
+Requirements:
+
+- Node.js 18 or newer.
+- The official OpenAI Codex CLI, with `codex --version` working.
+
+## Install
 
 ```sh
 npm install -g github:rmqg/codex-multi-account
 ```
 
-To update an existing global install, run the same command again:
+Update with the same command:
 
 ```sh
 npm install -g github:rmqg/codex-multi-account
 ```
 
-4. Decide how many accounts you want to use; call that number `<N>`. Create account homes and shared session links:
+Confirm the commands are available:
 
 ```sh
-cx-setup --accounts <N> --migrate
-```
-
-Create an OpenAI API key or OpenAI-compatible API account:
-
-```sh
-printf '%s' "$OPENAI_API_KEY" | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
-```
-
-Use `--full` if you also want logs, state, goals, memories sqlite files, and generated images linked:
-
-```sh
-cx-setup --accounts <N> --full --migrate
-```
-
-5. Log in once per account:
-
-```sh
-for i in $(seq 1 <N>); do
-  CODEX_HOME="$HOME/.codex-account$i" codex login
-done
-```
-
-6. Verify:
-
-```sh
-cx status
-cxa --dry-run
-```
-
-Optional: install the PATH wrapper when you also want direct `codex` runs to trust the current project automatically:
-
-```sh
-cx-setup --install-codex-wrapper --force
-```
-
-This installs or updates `~/.local/bin/codex`. Make sure `~/.local/bin` appears in PATH before the official `codex` binary. If an old shell cached the previous path, run `rehash` or open a new terminal.
-
-## Commands
-
-```sh
-cx [codex args...]
-cx exec "prompt"
-cx auto [codex args...]
-cx --account work [codex args...]
-cx status
-cx quota
-cx --dry-run [codex args...]
-cx --no-bypass [codex args...]
-cx --no-trust [codex args...]
-
-cxa [codex args...]
-cxr [extra resume args...]
-cx-setup [options]
+cx --help
 cx-setup --help
-cx-setup --list
-cx-setup --install-codex-wrapper --force
-cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
-cx-setup --remove free
-cx-setup --accounts 2 --prune --migrate
 ```
 
-`cxa` expands to:
+## First Setup
+
+If you have 3 accounts, create 3 account folders:
 
 ```sh
-cx auto "$@"
+cx-setup --accounts 3 --migrate
 ```
 
-`cxr` expands to:
+This creates:
+
+```text
+~/.codex-account1
+~/.codex-account2
+~/.codex-account3
+```
+
+Log in once for each account:
 
 ```sh
-cx resume --last "$@"
+CODEX_HOME="$HOME/.codex-account1" codex login
+CODEX_HOME="$HOME/.codex-account2" codex login
+CODEX_HOME="$HOME/.codex-account3" codex login
 ```
 
-`cx --account work ...` is the explicit-account path. It uses only that account and does not probe usage, sort accounts, or auto-switch. Without an explicit account, `cx` uses the same auto-switching path as `cxa`.
-
-`cx status` prints every account's active state, auth type, 5h/weekly used percentages, reached-limit reason, and home. `cx quota`, `cx limits`, and `cx remaining` print each account as a small multi-line block with ASCII progress bars for 5h/weekly remaining percentages.
-
-Use `--` when an argument must be passed to Codex even though it looks like a `cx` wrapper option:
+Check status:
 
 ```sh
-cx --account work -- --dry-run exec "hello"
+cx status
 ```
 
-By default, `cx` writes the current directory and any `--cd`/`-C` target into the selected account's `CODEX_HOME/config.toml` before launching the real Codex CLI:
+Check remaining quota:
+
+```sh
+cx quota
+```
+
+`cx quota` prints one block per account, with colored ASCII bars for 5h and weekly remaining quota.
+
+## Daily Use
+
+Start Codex with automatic account selection:
+
+```sh
+cxa
+```
+
+Run a one-shot task:
+
+```sh
+cx exec "explain this repo"
+```
+
+Resume the last conversation:
+
+```sh
+cxr
+```
+
+Force one account:
+
+```sh
+cx --account 1
+cx --account account2
+```
+
+Show account status:
+
+```sh
+cx status
+```
+
+Show remaining quota:
+
+```sh
+cx quota
+cx limits
+cx remaining
+```
+
+These three quota commands are equivalent.
+
+## Command Cheat Sheet
+
+```sh
+cx [codex args...]              # Run Codex with automatic account selection
+cxa [codex args...]             # Auto mode, same as cx auto
+cxr [extra resume args...]      # Resume the last conversation
+cx status                       # Show account status and used quota
+cx quota                        # Show remaining quota bars
+cx --account 2                  # Use only account 2
+cx --no-trust                   # Do not write project trust automatically
+cx --no-bypass                  # Do not add the bypass flag automatically
+cx-setup --accounts 3 --migrate # Create 3 account folders
+cx-setup --list                 # List account folders
+```
+
+## What Auto Trust Means
+
+Codex may ask this when entering a project for the first time:
+
+```text
+Do you trust the contents of this directory?
+```
+
+With multiple accounts, seeing that prompt for every account is annoying.
+
+By default, `cx` writes the current project to the selected account's:
+
+```text
+CODEX_HOME/config.toml
+```
+
+The entry looks like this:
 
 ```toml
 [projects."/some/path"]
 trust_level = "trusted"
 ```
 
-This prevents a newly selected account from stopping at the “Do you trust the contents of this directory?” prompt during automatic switching. The write is idempotent and only updates the matching project table's `trust_level`; it never links, copies, or shares `auth.json`. Use `--no-trust` or `CX_NO_TRUST=1` to keep Codex's normal directory trust prompt.
+This helps account switching continue without a trust prompt.
 
-After `cx-setup --install-codex-wrapper --force`, direct `codex` runs perform the same project-trust write before handing off to the real Codex CLI. Set `CODEX_TRUST_ALL=0` or `CX_NO_TRUST=1` to disable that wrapper behavior; set `CX_REAL_CODEX=/path/to/codex` if the wrapper cannot find the real Codex binary.
+To keep Codex's original trust prompt:
 
-## Multiple Accounts
+```sh
+cx --no-trust
+CX_NO_TRUST=1 cxa
+```
 
-When no account environment variable is set, `cx` auto-discovers existing account homes:
+## Make Plain codex Auto Trust Too
+
+If you sometimes run `codex` directly instead of `cx` or `cxa`, install the PATH wrapper:
+
+```sh
+cx-setup --install-codex-wrapper --force
+```
+
+Confirm it is first in PATH:
+
+```sh
+command -v codex
+```
+
+Expected output:
 
 ```text
-~/.codex-account*
+~/.local/bin/codex
 ```
 
-Auto-discovery skips `.cx-backup-*` directories created by `cx-setup --remove` or `--prune`.
-
-On a new machine, create those homes first with `cx-setup --accounts <N>`. You can also explicitly force the numbered range to probe:
+If your old shell cached the previous path, run:
 
 ```sh
-CX_ACCOUNT_COUNT=<N> cx status
-CX_ACCOUNT_COUNT=<N> cx quota
-CX_ACCOUNT_COUNT=<N> cxa
+rehash
 ```
 
-For custom homes:
+Or open a new terminal.
 
-```sh
-CX_ACCOUNT_HOMES=work=~/.codex-work,school=~/.codex-school,backup=/mnt/codex-backup cx status
-```
-
-With `CX_ACCOUNT_HOMES`, selectors can use the configured names:
-
-```sh
-CX_ACCOUNT_HOMES=work=~/.codex-work,school=~/.codex-school cx --account work
-```
-
-Use the same homes with setup when you need shared sessions for custom paths:
-
-```sh
-cx-setup --homes work=~/.codex-work,school=~/.codex-school --migrate
-```
-
-Account names and account home paths must be unique. An account home must not be the same directory as the shared home.
-
-## API Key Accounts
-
-`cx-setup --add-api-key <name>` creates a named API-key account. The default account home is `~/.codex-account-<name>`, so `free` becomes `~/.codex-account-free` and is discovered as `free`.
-
-Prefer reading keys from an environment variable or stdin so the key is not left in shell history:
-
-```sh
-OPENAI_API_KEY=sk-... cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://ai2.hhhl.cc/v1 --model gpt-5.5 --api-key-check --migrate
-
-printf '%s' 'sk-...' | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://ai2.hhhl.cc/v1 --model gpt-5.5 --api-key-check --migrate
-```
-
-The command writes `auth.json` under that account home:
-
-```json
-{
-  "auth_mode": "apikey",
-  "OPENAI_API_KEY": "sk-..."
-}
-```
-
-It also writes `cli_auth_credentials_store = "file"` and `forced_login_method = "api"` to that account's `config.toml`, plus `model` and `openai_base_url` when supplied. If `auth.json` already exists, setup refuses to replace it unless you pass `--force`.
-
-`--openai-base-url` is normalized to an http(s) URL without a trailing `/`. Add `--api-key-check` to validate the endpoint before `auth.json` is written. The default `auto` mode calls `<openai_base_url>/responses` when `--model` is supplied, and falls back to `<openai_base_url>/models` when no model was supplied. You can also use `--api-key-check=responses`, `--api-key-check=chat`, or `--api-key-check=models` explicitly. Use `--api-key-check-timeout-ms <MS>` to change the timeout. Failed checks do not write API-key credentials.
-
-API-key accounts do not use the ChatGPT account rate-limit probe. Auto mode treats them as usable, but their selection order is controlled by the API-key mode:
-
-```sh
-CX_API_KEY_MODE=fallback cxa
-CX_API_KEY_MODE=prefer cxa
-cx-setup --api-key-mode prefer
-```
-
-`fallback` is the default: use regular ChatGPT/Codex accounts first, then API-key accounts only when those accounts are unavailable, fail probing, or hit limits. `prefer` selects API-key accounts first. `cx-setup --api-key-mode <mode>` persists the local default to `~/.config/codex-cx/config.json`; `CX_API_KEY_MODE` temporarily overrides it.
-
-## Adding And Removing Accounts
-
-List the accounts setup currently discovers or selects:
-
-```sh
-cx-setup --list
-cx-setup --accounts 3 --list
-cx-setup --homes work=~/.codex-work,school=~/.codex-school --list
-```
-
-The list shows account name, whether the home exists, active state, auth type, linked shared-item count, and home path. It does not read or print API keys.
-
-Add numbered accounts as before:
-
-```sh
-cx-setup --accounts <N> --migrate
-```
-
-When reducing `<N>`, old `.codex-account*` directories are still auto-discovered. Use `--prune` to move discovered account homes outside the target set to `.cx-backup-*` names:
-
-```sh
-cx-setup --accounts 2 --prune --migrate
-```
-
-Remove one named or numbered account:
-
-```sh
-cx-setup --remove free
-cx-setup --remove account3
-cx-setup --remove 3
-cx-setup --homes work=~/.codex-work --remove work
-```
-
-Removal moves the whole account home to a backup path by default. It does not delete or share any `auth.json`. `--remove` uses the merged candidate set from auto-discovered accounts plus accounts explicitly selected with `--accounts` or `--homes`; the same home is processed only once. If a selector matches multiple different homes, setup reports the ambiguity and asks for a more specific name or path.
-
-Backup directory names contain `.cx-backup-*`, and current `cx`, `cxr`, and `cx-setup --list` skip those backups. A removed API-key account will not be auto-selected again just because its backup directory still exists under the home directory.
-
-If the target home is used by a running Codex process, real runs refuse to proceed; exit that session first, or pass `--allow-active` if you accept the risk.
-
-## Shared Workspace Setup
-
-`cx-setup` creates account directories and links shared workspace state. It never links `auth.json`; every account keeps its own login.
+## What Gets Shared
 
 Default shared items:
 
@@ -258,89 +229,118 @@ history.jsonl
 models_cache.json
 ```
 
-Full shared items add:
+Important points:
 
-```text
-log
-goals_1.sqlite*
-logs_2.sqlite*
-memories_1.sqlite*
-state_5.sqlite*
-```
+- Session history is shared, so switching accounts can continue more easily.
+- `auth.json` is not shared.
+- Every account keeps its own login.
 
-Useful setup commands:
+If you also want logs, goals, state, and memories sqlite files shared:
 
 ```sh
-cx-setup --accounts <N> --dry-run
-cx-setup --list
-cx-setup --accounts <N> --migrate
-cx-setup --accounts <N> --full --migrate
-cx-setup --accounts <N> --home ~/.codex-shared --prefix ~/.codex-account --full --migrate
-cx-setup --homes work=~/.codex-work,school=~/.codex-school --full --migrate
-cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
-cx-setup --install-codex-wrapper --force
-cx-setup --accounts 2 --prune --migrate
+cx-setup --accounts 3 --full --migrate
+```
+
+`--full` is more aggressive. Avoid running multiple Codex instances that write state at the same time unless you accept the risk.
+
+## API Key Account
+
+You can add an API key account as a fallback.
+
+Prefer reading the key from an environment variable:
+
+```sh
+OPENAI_API_KEY=sk-... cx-setup --add-api-key free --api-key-env OPENAI_API_KEY --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
+```
+
+Or read it from stdin so it is not stored in shell history:
+
+```sh
+printf '%s' "$OPENAI_API_KEY" | cx-setup --add-api-key free --api-key-stdin --openai-base-url https://proxy.example.com/v1 --model gpt-5.5 --api-key-check --migrate
+```
+
+Default selection policy:
+
+- Use normal ChatGPT/Codex accounts first.
+- Use API key accounts after those accounts fail, are unavailable, or hit limits.
+
+To prefer API key accounts:
+
+```sh
+CX_API_KEY_MODE=prefer cxa
+cx-setup --api-key-mode prefer
+```
+
+The local API key mode is stored in `~/.config/codex-cx/config.json`. The directory keeps the old name for compatibility with existing installs.
+
+## Add Accounts
+
+If you had 3 accounts and now want 4:
+
+```sh
+cx-setup --accounts 4 --migrate
+CODEX_HOME="$HOME/.codex-account4" codex login
+```
+
+## Remove Accounts
+
+Remove account `free`:
+
+```sh
 cx-setup --remove free
 ```
 
-`--migrate` copies existing account data into the shared home when the shared target does not already exist, then moves the old per-account path to a `.cx-backup-*` name before creating the symlink. SQLite files cannot be truly merged; existing per-account files are kept in backups.
-
-`--force` moves existing paths aside without copying them first. Use it only when you know the existing data is disposable.
-
-`cx-setup` refuses to modify account homes that are currently used by running Codex processes. Exit those sessions first. `--dry-run` is always safe. `--allow-active` bypasses the guard, but it is risky with `--full` because SQLite/state files can be open while they are moved. After `--full`, avoid running multiple Codex instances that write state at the same time unless you accept the usual shared-SQLite concurrency risk.
-
-## Selection Policy
-
-Automatic mode first skips exhausted or unavailable accounts. An account is unavailable when probing fails, no limit data is available, Codex reports a reached limit, 5h usage is at least 100%, or weekly usage is at least 100%. Reached primary limits, including `workspace_owner_credits_depleted`, are shown as `5h>=100%`; reached secondary limits are shown as `weekly>=100%`.
-
-Remaining accounts are sorted with this policy:
-
-- If weekly usage differs by more than 5 percentage points, choose the account with lower weekly usage.
-- If weekly usage is within 5 percentage points, compare 5h usage.
-- If 5h usage differs by more than 20 percentage points, choose the account with lower 5h usage.
-- If 5h usage is within 20 percentage points, prefer an inactive account.
-- If still tied, use lower 5h usage, then lower weekly usage, then account name.
-
-When automatic mode prints the selected account, it appends the account email when one can be read from that account's `auth.json`, for example `[cx-auto] selected account1 (name@example.com): ...`. If no email is available, or if `auth.json` is not parseable JSON, the original account-name output is preserved.
-
-## Auto-Switching
-
-During a run, `cx` watches the Codex TUI log for usage-limit errors. It recognizes Codex's own limit messages such as `You've hit your usage limit`, `Your workspace is out of credits`, workspace credit/spend-cap reached types, `Turn error` lines with Codex HTTP 429 responses, and structured Goal-mode usage-limit logs. It ignores tool-call text, command output, and external service throttling such as GitHub curated-plugin sync 429s. If a real usage limit is detected, `cx` terminates the current Codex process, marks that account exhausted for the current wrapper run, and switches to another usable account.
-
-The retry path depends on what happened before the limit:
+Remove account 3:
 
 ```sh
-codex resume <interrupted-session-id> "Continue the interrupted task ..."
-codex exec resume <interrupted-session-id> "Continue the interrupted task ..."
+cx-setup --remove 3
 ```
 
-If the last turn in the current session completed normally and produced assistant output, `cx` only resumes the session. If an interactive `cx` or `cxr` turn was interrupted after a new user instruction was recorded, or Codex wrote `task_complete` for an out-of-credits turn with an empty `last_agent_message`, `cx` resumes it through `codex resume <interrupted-session-id> "Continue ..."` so the next account opens the TUI and submits a continuation prompt for that pending instruction. Even if the same turn already had earlier assistant output, an out-of-credits completion with no final `last_agent_message` is treated as unfinished. When the session file has an id, `cx` targets the exact interrupted session instead of relying on the next account's own `--last`.
+Removal does not delete data. It moves the account folder to a `.cx-backup-*` backup path.
 
-If `cx` cannot find an exact session id, it does not build `codex resume --last "Continue ..."`, because Codex CLI parses that `Continue ...` text as a session id. In that case it falls back to `codex exec resume --last "Continue ..."` so the continuation prompt is actually sent.
+## Custom Account Folders
 
-For `cx exec ...`, retries use `codex exec resume <interrupted-session-id> "Continue ..."` so non-interactive sessions keep their mode and can explicitly continue the pending instruction. If the original command was `cx exec resume <session-id>`, the retry keeps that explicit session id instead of switching to `--last`.
+If you do not want numbered folders:
 
-For `cx resume ...`, `cxr`, and `cx exec resume ...`, `cx` checks the target session for a paused, usage-limited, or blocked goal before launching Codex. If one exists, it uses Codex app-server to mark the goal active, then continues with the original command; if there is no goal or the goal is complete, the existing resume behavior is unchanged.
+```sh
+cx-setup --homes work=~/.codex-work,school=~/.codex-school --migrate
+```
 
-Set `CX_INTERACTIVE_AUTO_EXEC=1` to force the older non-interactive `codex exec resume ...` continuation path for interrupted interactive turns.
+Use them like this:
 
-If the next account does not share the `sessions` directory, `cx` first copies only the interrupted session JSONL file into the next account home, then resumes by the exact session id. It never copies, links, or shares any `auth.json`. If the limited process did not create a current session file, `cx` retries the original command on the next account instead of blindly resuming an unrelated older session.
+```sh
+cx --account work
+CX_ACCOUNT_HOMES=work=~/.codex-work,school=~/.codex-school cxa
+```
 
-If every candidate account is exhausted or unavailable, `cx` prints the account status and exits with an error instead of launching Codex.
+## Environment Variables
 
-Auto-resume still works best after `cx-setup` links the account homes to shared session directories; the runtime single-session copy is a fallback to avoid resuming the target account's older `--last` conversation when sessions are not shared.
-
-## Environment
+Common variables:
 
 ```text
-CX_ACCOUNT=1|account1|work
-CX_ACCOUNT_COUNT=N
-CX_ACCOUNT_HOMES=name=/path,name2=/path2
-CX_API_KEY_MODE=prefer|fallback
+CX_ACCOUNT=1
+CX_ACCOUNT_COUNT=3
+CX_ACCOUNT_HOMES=work=/path/a,school=/path/b
+CX_API_KEY_MODE=prefer
 CX_NO_BYPASS=1
 CX_NO_TRUST=1
-CX_COLOR=1|0
+CX_COLOR=1
 NO_COLOR=1
+```
+
+Meaning:
+
+- `CX_ACCOUNT=1`: always use account 1.
+- `CX_ACCOUNT_COUNT=3`: only probe accounts 1 through 3.
+- `CX_API_KEY_MODE=prefer`: prefer API key accounts.
+- `CX_NO_BYPASS=1`: do not add the bypass flag automatically.
+- `CX_NO_TRUST=1`: do not write project trust automatically.
+- `CX_COLOR=1`: force colored quota bars.
+- `CX_COLOR=0` or `NO_COLOR=1`: disable color.
+
+Advanced variables:
+
+```text
 CODEX_TRUST_ALL=0
 CX_REAL_CODEX=/path/to/codex
 CX_AUTO_RESUME_GOAL=0
@@ -350,46 +350,73 @@ CX_AUTO_MAX_SWITCHES=5
 CX_INTERACTIVE_AUTO_EXEC=1
 ```
 
-`CX_ACCOUNT` behaves like `--account`: it disables probing, sorting, and auto-switching and uses only the selected account.
+## How Auto-Switch Continues Work
 
-`CX_ACCOUNT_COUNT`, `CX_LIMIT_TIMEOUT_MS`, `CX_LIMIT_RETRIES`, and `CX_AUTO_MAX_SWITCHES` must be positive integers.
+When the current account hits a usage limit, `cx` tries to:
 
-`CX_API_KEY_MODE=fallback` is the default selection policy: usable ChatGPT/Codex accounts come first, and API-key accounts are fallback accounts after limits or probe failures. `CX_API_KEY_MODE=prefer` selects API-key accounts first. You can also persist a local default with `cx-setup --api-key-mode prefer`, which writes `~/.config/codex-cx/config.json`.
+1. Stop the current Codex process.
+2. Mark that account unavailable for this wrapper run.
+3. Pick another usable account.
+4. Resume the exact interrupted session first.
+5. Send a continuation prompt so the next account continues the unfinished work.
 
-`CX_LIMIT_TIMEOUT_MS` applies to each app-server rate-limit probe attempt. `CX_LIMIT_RETRIES` controls how many times each account is probed before it is treated as temporarily unavailable; missing `auth.json` is still reported immediately.
+Common retry shapes:
 
-By default, `cx` adds `--dangerously-bypass-approvals-and-sandbox` unless a sandbox or approval option is already present. Use `--no-bypass` or `CX_NO_BYPASS=1` to disable that default.
+```sh
+codex resume <interrupted-session-id> "Continue the interrupted task ..."
+codex exec resume <interrupted-session-id> "Continue the interrupted task ..."
+```
 
-By default, `cx` writes the launch cwd and any `--cd`/`-C` target to the selected account's `config.toml` so account switches are not interrupted by the directory trust prompt. Use `--no-trust` or `CX_NO_TRUST=1` to disable that default.
-
-`cx quota` emits colored progress bars only on TTYs by default. Use `CX_COLOR=1` to force color, or `CX_COLOR=0` / `NO_COLOR=1` to disable color.
-
-After the direct `codex` PATH wrapper is installed, `CODEX_TRUST_ALL=0` disables only the direct `codex` project-trust write. `CX_NO_TRUST=1` disables automatic project-trust writes for both `cx` and direct `codex`. `CX_REAL_CODEX` can point the wrapper at the real Codex CLI binary.
-
-By default, resume commands automatically reactivate paused, usage-limited, or blocked goals. Set `CX_AUTO_RESUME_GOAL=0` to disable this preflight.
-
-By default, interrupted interactive turns continue through TUI `codex resume <session-id> "Continue ..."` after an automatic account switch. Set `CX_INTERACTIVE_AUTO_EXEC=1` to force non-interactive `codex exec resume ...` instead.
+If no exact session id is found, `cx` uses a safer fallback and avoids treating `Continue ...` as a session id.
 
 ## Troubleshooting
 
-- `No Codex account homes found`: on a new machine, run `cx-setup --accounts <N> --migrate`, or set `CX_ACCOUNT_HOMES`.
-- `missing ~/.codex-accountN/auth.json`: run `CODEX_HOME=~/.codex-accountN codex login`.
-- `All candidate accounts are exhausted or unavailable`: all probed accounts failed login/probing or hit a 5h/weekly limit.
-- Probe errors like `failed to fetch codex rate limits`: increase `CX_LIMIT_TIMEOUT_MS` or `CX_LIMIT_RETRIES` if the network is temporarily slow.
-- `cx status` does not show active accounts: active detection reads `/proc`, so it is Linux-focused.
-- Auto-switch stops at the directory trust prompt: confirm the installed `cx` is current. Current versions write the cwd and any `--cd`/`-C` target into the selected account's `config.toml`; if `CX_NO_TRUST=1` or `--no-trust` is set, unset it or trust the directory manually.
-- Direct `codex` still shows the directory trust prompt: run `cx-setup --install-codex-wrapper --force`, confirm `command -v codex` points at `~/.local/bin/codex`, and run `rehash` or open a new terminal if an old shell cached the previous path.
-- The `codex` wrapper cannot find the real Codex CLI: confirm another official `codex` binary exists later in PATH, or set `CX_REAL_CODEX=/path/to/codex`.
-- Auto-switch reports `No saved session found with ID Continue...`: an older version built the invalid command `codex resume --last "Continue ..."`. Update to the current version; it uses `codex resume <id> "Continue ..."` when an exact id is available, and falls back to `codex exec resume --last "Continue ..."` when no id can be found.
-- Auto-switch resumes the wrong conversation: confirm the installed `cx` is current. Current versions target the exact interrupted session id first and copy that one session file when `sessions` is not shared. If it still happens, run `cx-setup --migrate` or `cx-setup --full --migrate` so all account homes share `sessions`.
-- `cx-setup --remove free` still auto-selects free: update to the current version. Older versions discovered `.codex-account-free.cx-backup-*` backup directories as accounts; current versions skip `.cx-backup-*` backups. Run `cx-setup --list` to confirm the candidates.
-- Existing files block setup: rerun with `--migrate` to copy and back up, or `--force` to back up without copying.
-- Setup refuses active homes: exit running Codex sessions, then rerun `cx-setup`.
-- Setup reports duplicate account names/homes: fix `--homes` or `CX_ACCOUNT_HOMES` so every account has a unique name and unique `CODEX_HOME`.
-- Setup reports `Account home must not be the shared home`: use separate directories, for example `~/.codex` for shared state and `~/.codex-account1` for the first account.
-- Old accounts still appear after reducing `--accounts <N>`: the old directories are still discoverable. Run `cx-setup --accounts <N> --prune --migrate` or `cx-setup --remove <selector>`.
-- API-key checking fails: confirm `--openai-base-url` points exactly at the OpenAI-compatible API root, usually ending in `/v1`; `--api-key-check` surfaces HTML, 404, TLS, provider key-rotation/permission, empty model-list, and missing `/responses` problems before the account is written.
-- API-key accounts are not selected first: the default is `fallback`; use `CX_API_KEY_MODE=prefer cxa` for a one-off run, or `cx-setup --api-key-mode prefer` to persist the local default.
+`No Codex account homes found`
+
+Create account folders first:
+
+```sh
+cx-setup --accounts 3 --migrate
+```
+
+`missing ~/.codex-accountN/auth.json`
+
+That account is not logged in:
+
+```sh
+CODEX_HOME="$HOME/.codex-accountN" codex login
+```
+
+`All candidate accounts are exhausted or unavailable`
+
+All accounts are unavailable, not logged in, failed probing, or hit limits. Check:
+
+```sh
+cx status
+cx quota
+```
+
+Auto-switch still shows the trust prompt
+
+Confirm this is not set:
+
+```sh
+CX_NO_TRUST=1
+```
+
+You can also reinstall the direct `codex` wrapper:
+
+```sh
+cx-setup --install-codex-wrapper --force
+```
+
+`cx status` does not show active accounts
+
+Active detection uses Linux `/proc`, so it may be inaccurate outside Linux.
+
+API key checking fails
+
+Check that `--openai-base-url` points to the correct API root. It usually ends in `/v1`.
 
 ## License
 
