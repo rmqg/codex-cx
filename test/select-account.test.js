@@ -13,6 +13,7 @@ const {
   isResumeInvocation,
   limitExhaustedReason,
   logChunkHasUsageLimit,
+  pinTaskDefaultsFromAccount,
   shouldResumeGoalStatus,
   retryArgsAfterRateLimit,
   selectResult,
@@ -90,6 +91,16 @@ function taskStarted() {
   return { type: "event_msg", payload: { type: "task_started", turn_id: "turn-1" } };
 }
 
+function turnContext(effort) {
+  return {
+    type: "turn_context",
+    payload: {
+      effort,
+      collaboration_mode: { settings: { reasoning_effort: effort } },
+    },
+  };
+}
+
 function userMessage(text) {
   return {
     type: "response_item",
@@ -141,6 +152,78 @@ function tokenCountWithoutCredits() {
   assert.equal(extractAccountEmail({ tokens: { id_token: "not-a-token" } }), "");
   assert.equal(isApiKeyAuth({ auth_mode: "apikey", OPENAI_API_KEY: "sk-test" }), true);
   assert.equal(isApiKeyAuth({ auth_mode: "chatgpt" }), false);
+}
+
+{
+  const accountHome = tempAccountHome();
+  fs.writeFileSync(
+    path.join(accountHome, "config.toml"),
+    [
+      'model = "gpt-fast"',
+      'profile = "fast"',
+      'model_reasoning_effort = "low"',
+      "",
+      "[projects.\"/tmp/project\"]",
+      'trust_level = "trusted"',
+      "",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(pinTaskDefaultsFromAccount(["exec", "ship feature"], { home: accountHome }), [
+    "--model",
+    "gpt-fast",
+    "--profile",
+    "fast",
+    "-c",
+    'model_reasoning_effort="low"',
+    "exec",
+    "ship feature",
+  ]);
+  assert.deepEqual(
+    pinTaskDefaultsFromAccount(
+      ["--model", "gpt-5", "--profile", "deep", "-c", 'model_reasoning_effort="high"', "exec", "ship feature"],
+      { home: accountHome },
+    ),
+    ["--model", "gpt-5", "--profile", "deep", "-c", 'model_reasoning_effort="high"', "exec", "ship feature"],
+    "explicit task model/profile/effort win over account defaults",
+  );
+  assert.deepEqual(
+    pinTaskDefaultsFromAccount(["login"], { home: accountHome }),
+    ["login"],
+    "non-task Codex subcommands do not receive task model defaults",
+  );
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [turnContext("xhigh"), taskStarted(), userMessage("/fast"), userMessage("finish it")]);
+
+  const retryArgs = retryArgsAfterRateLimit(["-c", 'model_reasoning_effort="xhigh"', "exec", "finish it"], accountHome, {
+    minMtimeMs: Date.now() - 1000,
+  });
+
+  assert.deepEqual(retryArgs.slice(0, 2), ["-c", 'model_reasoning_effort="low"']);
+  assert.equal(retryArgs.includes('model_reasoning_effort="xhigh"'), false);
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [turnContext("low"), taskStarted(), userMessage("already fast")]);
+
+  const retryArgs = retryArgsAfterRateLimit(["-c", 'model_reasoning_effort="xhigh"', "exec", "already fast"], accountHome, {
+    minMtimeMs: Date.now() - 1000,
+  });
+
+  assert.deepEqual(retryArgs.slice(0, 2), ["-c", 'model_reasoning_effort="low"']);
+  assert.equal(retryArgs.includes('model_reasoning_effort="xhigh"'), false);
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
 }
 
 {

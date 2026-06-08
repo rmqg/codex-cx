@@ -148,7 +148,7 @@ function usage() {
   cx auto [codex args...]                    Same as cx without --account.
   cx --account <selector> [codex args...]    Run only with one selected account.
   cx status
-  cx quota|limits|remaining                  Print weighted total and per-account quota bars.
+  cx quota|limits|remaining                  Print weighted quota bars and reset times.
   cx --dry-run [codex args...]
   cx --no-bypass [codex args...]
   cx --no-trust [codex args...]
@@ -177,6 +177,10 @@ Environment:
 Behavior:
   cx launches the real Codex CLI with the selected CODEX_HOME, preserving
   official Codex behavior while adding local account selection and handoff.
+  During one auto-switched task, model/profile/reasoning defaults are pinned
+  from explicit task args or the first selected account. If the interrupted
+  session records /fast, /slow, or a later turn_context effort, the retry uses
+  that latest task effort instead of the next account's default.
   By default it writes the current directory and any --cd/-C target to the
   selected account's config.toml as projects."<path>".trust_level="trusted".
   Use --no-trust or CX_NO_TRUST=1 to keep Codex's normal trust prompt.
@@ -297,6 +301,95 @@ function readLocalConfig() {
   } catch {
     return {};
   }
+}
+
+function stripTomlComment(line) {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inDouble && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (!inDouble && char === "'") {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (!inSingle && char === '"') {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (!inSingle && !inDouble && char === "#") {
+      return line.slice(0, index);
+    }
+  }
+
+  return line;
+}
+
+function parseTomlScalarString(rawValue) {
+  const value = stripTomlComment(String(rawValue || "")).trim();
+  if (!value) {
+    return "";
+  }
+
+  if (value.startsWith('"')) {
+    const match = value.match(/^"((?:\\.|[^"\\])*)"/);
+    if (!match) {
+      return "";
+    }
+    try {
+      return JSON.parse(`"${match[1]}"`);
+    } catch {
+      return match[1];
+    }
+  }
+
+  if (value.startsWith("'")) {
+    const end = value.indexOf("'", 1);
+    return end > 0 ? value.slice(1, end) : "";
+  }
+
+  return value.split(/\s+/u, 1)[0] || "";
+}
+
+function readTopLevelTomlStrings(file, keys) {
+  const values = {};
+  let text;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return values;
+  }
+
+  for (const line of text.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    if (trimmed.startsWith("[")) {
+      break;
+    }
+
+    const match = trimmed.match(/^([A-Za-z0-9_.-]+)\s*=\s*(.+)$/u);
+    if (!match || !keys.has(match[1])) {
+      continue;
+    }
+
+    const value = parseTomlScalarString(match[2]);
+    if (value) {
+      values[match[1]] = value;
+    }
+  }
+
+  return values;
 }
 
 function normalizeApiKeyMode(value, label = "api key mode") {
@@ -818,6 +911,71 @@ function rawQuotaCapacity(limit, key) {
   return Number.isFinite(capacity) && capacity > 0 ? capacity : null;
 }
 
+function epochMillis(value) {
+  const numeric = finiteNumber(value);
+  if (Number.isFinite(numeric)) {
+    return numeric > 100000000000 ? numeric : numeric * 1000;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function rawQuotaResetMs(limit, key) {
+  const bucket = limit?.[key];
+  if (!bucket || typeof bucket !== "object") {
+    return null;
+  }
+
+  const absolute = firstFiniteNumber(
+    bucket.resets_at,
+    bucket.resetsAt,
+    bucket.reset_at,
+    bucket.resetAt,
+    bucket.reset_time,
+    bucket.resetTime,
+    bucket.next_reset,
+    bucket.nextReset,
+    bucket.next_resets_at,
+    bucket.nextResetsAt,
+  );
+  if (Number.isFinite(absolute)) {
+    return epochMillis(absolute);
+  }
+
+  for (const value of [
+    bucket.resets_at,
+    bucket.resetsAt,
+    bucket.reset_at,
+    bucket.resetAt,
+    bucket.reset_time,
+    bucket.resetTime,
+    bucket.next_reset,
+    bucket.nextReset,
+    bucket.next_resets_at,
+    bucket.nextResetsAt,
+  ]) {
+    const parsed = epochMillis(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  const relativeSeconds = firstFiniteNumber(
+    bucket.retry_after,
+    bucket.retryAfter,
+    bucket.reset_after,
+    bucket.resetAfter,
+    bucket.resets_in,
+    bucket.resetsIn,
+    bucket.retryAfterSeconds,
+    bucket.retry_after_seconds,
+  );
+  return Number.isFinite(relativeSeconds) ? Date.now() + relativeSeconds * 1000 : null;
+}
+
 function reached(limit) {
   if (!limit) {
     return "unknown";
@@ -991,6 +1149,47 @@ function formatOptionalPercent(value) {
   return `${text}%`;
 }
 
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function formatLocalDateTime(ms) {
+  const date = new Date(ms);
+  return (
+    `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ` +
+    `${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+  );
+}
+
+function formatDuration(ms) {
+  if (!Number.isFinite(ms)) {
+    return "unknown";
+  }
+  if (ms <= 0) {
+    return "now";
+  }
+
+  const minutes = Math.max(1, Math.round(ms / 60000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = minutes % 60;
+  if (days > 0) {
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  if (hours > 0) {
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  }
+  return `${mins}m`;
+}
+
+function formatResetTime(ms, now = Date.now()) {
+  if (!Number.isFinite(ms)) {
+    return "unknown";
+  }
+  const relative = ms <= now ? "now" : `in ${formatDuration(ms - now)}`;
+  return `${relative} (${formatLocalDateTime(ms)})`;
+}
+
 function shouldUseColor(stream = process.stderr) {
   if (process.env.CX_COLOR === "1") {
     return true;
@@ -1041,6 +1240,7 @@ function quotaWindowSummary(results, key) {
   let accountCount = 0;
   let weightedCount = 0;
   let fallbackCount = 0;
+  let resetMs = null;
 
   for (const result of results) {
     const remaining = remainingPercent(result, key);
@@ -1059,6 +1259,11 @@ function quotaWindowSummary(results, key) {
     accountCount += 1;
     totalCapacity += weight;
     remainingCapacity += (remaining / 100) * weight;
+
+    const candidateResetMs = rawQuotaResetMs(result.limits, key);
+    if (Number.isFinite(candidateResetMs) && (!Number.isFinite(resetMs) || candidateResetMs < resetMs)) {
+      resetMs = candidateResetMs;
+    }
   }
 
   return {
@@ -1066,6 +1271,7 @@ function quotaWindowSummary(results, key) {
     accountCount,
     weightedCount,
     fallbackCount,
+    resetMs,
   };
 }
 
@@ -1117,16 +1323,16 @@ function printQuota(results) {
   console.error("Quota remaining:");
   const total = quotaTotalSummary(results);
   console.error(quotaTotalLabel(total));
-  console.error(`  5h     ${formatProgressPercent(total.primary.percent)}`);
-  console.error(`  weekly ${formatProgressPercent(total.secondary.percent)}`);
+  console.error(`  5h     ${formatProgressPercent(total.primary.percent)}  reset ${formatResetTime(total.primary.resetMs)}`);
+  console.error(`  weekly ${formatProgressPercent(total.secondary.percent)}  reset ${formatResetTime(total.secondary.resetMs)}`);
   for (const result of results) {
     const auth = result.authMode === "apikey" ? "api-key" : result.authMode === "account" ? "account" : "-";
     const primary = formatProgressPercent(remainingPercent(result, "primary"));
     const secondary = formatProgressPercent(remainingPercent(result, "secondary"));
     const hit = limitExhaustedReason(result) || "-";
     console.error(`${result.account.name} [${auth}]${hit === "-" ? "" : ` (${hit})`}`);
-    console.error(`  5h     ${primary}`);
-    console.error(`  weekly ${secondary}`);
+    console.error(`  5h     ${primary}  reset ${formatResetTime(rawQuotaResetMs(result.limits, "primary"))}`);
+    console.error(`  weekly ${secondary}  reset ${formatResetTime(rawQuotaResetMs(result.limits, "secondary"))}`);
     console.error(`  home   ${result.account.home}`);
   }
 }
@@ -1298,6 +1504,155 @@ function splitLeadingOptions(args, start, valueOptions) {
   }
 
   return { options, index };
+}
+
+function hasValueOption(args, names) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const name = optionName(arg);
+    if (names.has(name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function configAssignmentKey(value) {
+  const match = String(value || "")
+    .trim()
+    .match(/^([A-Za-z0-9_.-]+)\s*=/u);
+  return match?.[1] || "";
+}
+
+function hasConfigAssignment(args, key) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if ((arg === "-c" || arg === "--config") && args[index + 1]) {
+      if (configAssignmentKey(args[index + 1]) === key) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--config=") && configAssignmentKey(arg.slice("--config=".length)) === key) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function withoutConfigAssignment(args, key) {
+  const filtered = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if ((arg === "-c" || arg === "--config") && args[index + 1]) {
+      if (configAssignmentKey(args[index + 1]) === key) {
+        index += 1;
+        continue;
+      }
+      filtered.push(arg, args[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--config=") && configAssignmentKey(arg.slice("--config=".length)) === key) {
+      continue;
+    }
+    filtered.push(arg);
+  }
+  return filtered;
+}
+
+function withTaskEffortArgs(args, effort) {
+  const normalized = normalizeTaskEffort(effort);
+  if (!normalized) {
+    return args;
+  }
+  return ["-c", `model_reasoning_effort=${JSON.stringify(normalized)}`, ...withoutConfigAssignment(args, "model_reasoning_effort")];
+}
+
+function shouldPinTaskDefaults(args) {
+  const leading = splitLeadingOptions(args, 0, globalValueOptions);
+  const command = args[leading.index] || null;
+  return !command || command === "exec" || command === "e" || command === "resume" || command === "review";
+}
+
+function taskDefaultArgsFromAccount(account, args) {
+  if (!shouldPinTaskDefaults(args)) {
+    return [];
+  }
+
+  const values = readTopLevelTomlStrings(path.join(account.home, "config.toml"), new Set(["model", "profile", "model_reasoning_effort"]));
+  const pinned = [];
+  if (values.model && !hasValueOption(args, new Set(["-m", "--model"])) && !hasConfigAssignment(args, "model")) {
+    pinned.push("--model", values.model);
+  }
+  if (values.profile && !hasValueOption(args, new Set(["-p", "--profile"])) && !hasConfigAssignment(args, "profile")) {
+    pinned.push("--profile", values.profile);
+  }
+  if (values.model_reasoning_effort && !hasConfigAssignment(args, "model_reasoning_effort")) {
+    pinned.push("-c", `model_reasoning_effort=${JSON.stringify(values.model_reasoning_effort)}`);
+  }
+  return pinned;
+}
+
+function pinTaskDefaultsFromAccount(args, account) {
+  const pinned = taskDefaultArgsFromAccount(account, args);
+  return pinned.length > 0 ? [...pinned, ...args] : args;
+}
+
+function normalizeTaskEffort(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/_/g, "-");
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "fast") {
+    return "low";
+  }
+  if (normalized === "slow") {
+    return "xhigh";
+  }
+  if (["minimal", "low", "medium", "high", "xhigh"].includes(normalized)) {
+    return normalized;
+  }
+  return "";
+}
+
+function taskEffortFromSlashText(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (/^\/fast(?:\s|$)/u.test(normalized)) {
+    return "low";
+  }
+  if (/^\/slow(?:\s|$)/u.test(normalized)) {
+    return "xhigh";
+  }
+  return "";
+}
+
+function textFromUserPayload(payload) {
+  if (payload?.type === "user_message") {
+    return payload.message || "";
+  }
+  if (payload?.type !== "message" || payload.role !== "user" || !Array.isArray(payload.content)) {
+    return "";
+  }
+  return payload.content
+    .map((item) => (item?.type === "input_text" || item?.type === "text" ? item.text || "" : ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function taskEffortFromTurnContext(payload) {
+  return normalizeTaskEffort(
+    payload?.effort ||
+      payload?.reasoning_effort ||
+      payload?.reasoningEffort ||
+      payload?.collaboration_mode?.settings?.reasoning_effort ||
+      payload?.collaboration_mode?.settings?.reasoningEffort,
+  );
+}
+
+function applySessionTaskState(args, sessionState) {
+  return withTaskEffortArgs(args, sessionState?.taskEffort);
 }
 
 function filterOptions(args, supportedOptions, valueOptions) {
@@ -1538,6 +1893,7 @@ function latestSessionTurnState(accountHome, options = {}) {
     completed: false,
     lastAgentMessage: null,
     usageLimited: false,
+    taskEffort: "",
   };
 
   let lines;
@@ -1560,6 +1916,16 @@ function latestSessionTurnState(accountHome, options = {}) {
     }
 
     const payload = event.payload || event;
+    const turnEffort = event.type === "turn_context" ? taskEffortFromTurnContext(payload) : "";
+    if (turnEffort) {
+      state.taskEffort = turnEffort;
+    }
+
+    const slashEffort = taskEffortFromSlashText(textFromUserPayload(payload));
+    if (slashEffort) {
+      state.taskEffort = slashEffort;
+    }
+
     if (event.type === "event_msg" && payload.type === "task_started") {
       state.activeTurn = true;
       state.sawUser = false;
@@ -1802,16 +2168,16 @@ function retryPlanAfterRateLimit(previousArgs, accountHome, options = {}) {
       retryAnalysis.mode === "interactive" &&
       (process.env.CX_INTERACTIVE_AUTO_EXEC === "1" || interactiveResumePromptNeedsExecFallback(retryAnalysis, prompt))
     ) {
-      return { args: execResumeArgsFromInteractiveAnalysis(retryAnalysis, prompt), session: retrySession };
+      return { args: applySessionTaskState(execResumeArgsFromInteractiveAnalysis(retryAnalysis, prompt), sessionState), session: retrySession };
     }
   } else if (!sessionState.completed && analysis.prompt) {
     if (analysis.mode === "interactive") {
-      return { args: [...previousArgs], session: retrySession };
+      return { args: applySessionTaskState([...previousArgs], sessionState), session: retrySession };
     }
     prompt = analysis.prompt;
   }
 
-  return { args: resumeArgsFromAnalysis(retryAnalysis, prompt), session: retrySession };
+  return { args: applySessionTaskState(resumeArgsFromAnalysis(retryAnalysis, prompt), sessionState), session: retrySession };
 }
 
 function retryArgsAfterRateLimit(previousArgs, accountHome, options = {}) {
@@ -2007,6 +2373,7 @@ async function runAuto(options, initialArgs) {
   let codexArgs = [...initialArgs];
   let pendingRetrySession = null;
   let switches = 0;
+  let taskDefaultsPinned = false;
 
   if (accounts.length < 1) {
     printNoAccountsConfigured();
@@ -2032,6 +2399,11 @@ async function runAuto(options, initialArgs) {
       printStatus(results);
       console.error("[cx-auto] All candidate accounts are exhausted or unavailable.");
       return 1;
+    }
+
+    if (!taskDefaultsPinned) {
+      codexArgs = pinTaskDefaultsFromAccount(codexArgs, selected.account);
+      taskDefaultsPinned = true;
     }
 
     const logDir = fs.mkdtempSync(path.join(os.tmpdir(), `cx-auto-${safeAccountName(selected.account.name)}-`));
@@ -2133,6 +2505,8 @@ module.exports = {
   reached,
   shouldResumeGoalStatus,
   selectResult,
+  taskDefaultArgsFromAccount,
+  pinTaskDefaultsFromAccount,
   trustedProjectPathsFromCodexArgs,
   usedPercent,
 };

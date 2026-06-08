@@ -42,8 +42,11 @@ cx status
 cx quota
 ```
 
-`cx quota` shows a weighted total first, then 5h and weekly bars for each account.
+`cx quota` shows a weighted total first, then 5h and weekly bars plus reset times for each account.
 When Codex does not report a capacity for a quota window, that window is counted as one equal-weight unit and the total label says so.
+
+During one auto-switched task, model/profile/reasoning defaults stay with the task.
+If you use `/fast` during the task, the retry keeps that faster task state when switching accounts.
 
 Run Codex:
 

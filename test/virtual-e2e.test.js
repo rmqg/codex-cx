@@ -83,6 +83,19 @@ function writeQueuedFollowupUsageLimitedSession() {
     JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-e2e', last_agent_message: null } })
   ].join('\\n') + '\\n');
 }
+function writeFastSwitchedUsageLimitedSession() {
+  const dir = path.join(home, 'sessions', '2026', '06', '04');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'rollout-e2e.jsonl'), [
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'session_meta', payload: { id: '019eaaaa-bbbb-7ccc-8ddd-000000000004', cwd: process.cwd() } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'turn_context', payload: { effort: 'xhigh', collaboration_mode: { settings: { reasoning_effort: 'xhigh' } } } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-e2e' } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '/fast' }] } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'finish this fast' }] } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'token_count', rate_limits: { credits: { has_credits: false }, rate_limit_reached_type: null } } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-e2e', last_agent_message: null } })
+  ].join('\\n') + '\\n');
+}
 function writeNoIdUsageLimitedSession() {
   const dir = path.join(home, 'sessions', '2026', '06', '04');
   fs.mkdirSync(dir, { recursive: true });
@@ -119,8 +132,8 @@ if (args[0] === 'app-server') {
         }
         const x = limits();
         send({ id: msg.id, result: { rateLimitsByLimitId: { codex: {
-          primary: { usedPercent: x.p, limit: x.pc },
-          secondary: { usedPercent: x.s, limit: x.sc },
+          primary: { usedPercent: x.p, limit: x.pc, resets_at: x.pr },
+          secondary: { usedPercent: x.s, limit: x.sc, resets_at: x.sr },
           rateLimitReachedType: x.r || ''
         } } } });
       }
@@ -172,6 +185,8 @@ if (args[0] === 'app-server') {
       writeUsageLimitedCompleteSession();
     } else if (process.env.FAKE_LIMIT_SESSION === 'queued-follow-up') {
       writeQueuedFollowupUsageLimitedSession();
+    } else if (process.env.FAKE_LIMIT_SESSION === 'fast-switched') {
+      writeFastSwitchedUsageLimitedSession();
     } else if (process.env.FAKE_LIMIT_SESSION === 'no-id-usage-complete') {
       writeNoIdUsageLimitedSession();
     } else {
@@ -193,10 +208,10 @@ if (args[0] === 'app-server') {
 fs.writeFileSync(path.join(fakeBin, "codex"), fakeCodex, { mode: 0o755 });
 
 const defaultLimits = {
-  ".codex-account1": { p: 4, s: 1, pc: 100, sc: 100, r: "" },
-  ".codex-account2": { p: 11, s: 2, pc: 200, sc: 200, r: "" },
-  ".codex-account3": { p: 8, s: 1, pc: 100, sc: 100, r: "" },
-  ".codex-account4": { p: 100, s: 49, pc: 50, sc: 50, r: "workspace_owner_credits_depleted" },
+  ".codex-account1": { p: 4, s: 1, pc: 100, sc: 100, pr: 4102444800, sr: 4103049600, r: "" },
+  ".codex-account2": { p: 11, s: 2, pc: 200, sc: 200, pr: 4102448400, sr: 4103053200, r: "" },
+  ".codex-account3": { p: 8, s: 1, pc: 100, sc: 100, pr: 4102452000, sr: 4103056800, r: "" },
+  ".codex-account4": { p: 100, s: 49, pc: 50, sc: 50, pr: 4102455600, sr: 4103060400, r: "workspace_owner_credits_depleted" },
 };
 
 const envBase = {
@@ -307,9 +322,9 @@ function runVirtualE2e() {
 
   result = ok("cx", ["quota"]);
   assert.match(result.stderr, /Quota remaining:/);
-  assert.match(result.stderr, /Total \[weighted by quota capacity\]\n  5h\s+\[################----\] 81\.33%\n  weekly \[###################-\] 93\.22%/);
-  assert.match(result.stderr, /account1 \[account\]\n  5h\s+\[###################-\] 96%\n  weekly \[####################\] 99%/);
-  assert.match(result.stderr, /account4 \[account\] \(5h>=100%\)\n  5h\s+\[--------------------\] 0%\n  weekly \[##########----------\] 51%/);
+  assert.match(result.stderr, /Total \[weighted by quota capacity\]\n  5h\s+\[################----\] 81\.33%  reset .*2100-\d\d-\d\d \d\d:\d\d\)\n  weekly \[###################-\] 93\.22%  reset .*2100-\d\d-\d\d \d\d:\d\d\)/);
+  assert.match(result.stderr, /account1 \[account\]\n  5h\s+\[###################-\] 96%  reset .*2100-\d\d-\d\d \d\d:\d\d\)\n  weekly \[####################\] 99%  reset .*2100-\d\d-\d\d \d\d:\d\d\)/);
+  assert.match(result.stderr, /account4 \[account\] \(5h>=100%\)\n  5h\s+\[--------------------\] 0%  reset .*2100-\d\d-\d\d \d\d:\d\d\)\n  weekly \[##########----------\] 51%  reset .*2100-\d\d-\d\d \d\d:\d\d\)/);
 
   const holder = spawn(path.join(fakeBin, "codex"), ["hold"], {
     env: { ...envBase, CODEX_HOME: path.join(root, ".codex-account2") },
@@ -460,6 +475,41 @@ function runVirtualE2e() {
   assert.ok(runs[1].args.includes("resume"));
   assert.ok(runs[1].args.includes("019eaaaa-bbbb-7ccc-8ddd-000000000001"));
   assert.ok(runs[1].args.some((arg) => /Continue the interrupted task/.test(arg)));
+
+  const account1Config = path.join(root, ".codex-account1", "config.toml");
+  const account3Config = path.join(root, ".codex-account3", "config.toml");
+  fs.writeFileSync(account1Config, 'model = "gpt-fast"\nmodel_reasoning_effort = "low"\n');
+  fs.writeFileSync(account3Config, 'model = "gpt-slow"\nmodel_reasoning_effort = "high"\n');
+  clearRecords();
+  ok("cxa", ["exec", "task defaults stay pinned"], {
+    FAKE_LIMIT_ACCOUNT: ".codex-account1",
+    FAKE_LIMIT_LOG: "out-of-credits",
+  });
+  runs = readRecords().filter((entry) => entry.type === "run");
+  assert.equal(runs.length, 2, JSON.stringify(runs));
+  assert.equal(runs[0].args[runs[0].args.indexOf("--model") + 1], "gpt-fast");
+  assert.ok(runs[0].args.includes('model_reasoning_effort="low"'));
+  assert.equal(runs[1].args[runs[1].args.indexOf("--model") + 1], "gpt-fast");
+  assert.ok(runs[1].args.includes('model_reasoning_effort="low"'));
+  assert.equal(runs[1].args.includes("gpt-slow"), false);
+  assert.equal(runs[1].args.includes('model_reasoning_effort="high"'), false);
+  fs.rmSync(account1Config, { force: true });
+  fs.rmSync(account3Config, { force: true });
+
+  fs.writeFileSync(account1Config, 'model = "gpt-fast"\nmodel_reasoning_effort = "xhigh"\n');
+  clearRecords();
+  ok("cxa", ["exec", "task switches to fast"], {
+    FAKE_LIMIT_ACCOUNT: ".codex-account1",
+    FAKE_LIMIT_LOG: "out-of-credits",
+    FAKE_LIMIT_SESSION: "fast-switched",
+  });
+  runs = readRecords().filter((entry) => entry.type === "run");
+  assert.equal(runs.length, 2, JSON.stringify(runs));
+  assert.ok(runs[0].args.includes('model_reasoning_effort="xhigh"'));
+  assert.equal(runs[1].args[runs[1].args.indexOf("--model") + 1], "gpt-fast");
+  assert.ok(runs[1].args.includes('model_reasoning_effort="low"'));
+  assert.equal(runs[1].args.includes('model_reasoning_effort="xhigh"'), false);
+  fs.rmSync(account1Config, { force: true });
 
   clearRecords();
   ok("cxa", ["resume", "--last"], {

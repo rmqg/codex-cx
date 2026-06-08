@@ -93,9 +93,10 @@ cx status
 cx quota
 ```
 
-`cx quota` 会先显示总剩余，再按账号分块显示 5h 和 weekly 剩余额度，并用彩色 ASCII 进度条显示大概情况。
+`cx quota` 会先显示总剩余，再按账号分块显示 5h 和 weekly 剩余额度、恢复时间，并用彩色 ASCII 进度条显示大概情况。
 总剩余不是简单平均；如果 Codex 返回了账号窗口上限，它会按上限加权，适合不同账号类型额度上限不一样的情况。
 如果某个窗口没有上限字段，它会按 1 个单位兜底，并在 Total 标题里标出 fallback。
+如果 Codex 没有返回恢复时间，对应窗口会显示 `reset unknown`。
 
 ## 日常使用
 
@@ -104,6 +105,9 @@ cx quota
 ```sh
 cxa
 ```
+
+一次任务开始后，模型、profile 和 reasoning 档位会跟着这次任务走，不会因为切到另一个账号就变成另一个账号的默认档位。
+如果你在任务中用 `/fast` 或 `/slow` 改了档位，自动切号续跑会读取中断会话里的最新档位继续。
 
 执行一次非交互任务：
 
@@ -147,7 +151,7 @@ cx [codex args...]              # 自动选择账号运行 Codex
 cxa [codex args...]             # 自动模式，等价于 cx auto
 cxr [extra resume args...]      # 恢复最后一个会话
 cx status                       # 查看账号状态和已用额度
-cx quota                        # 查看加权总剩余和每账号进度条
+cx quota                        # 查看加权总剩余、恢复时间和每账号进度条
 cx --account 2                  # 只用第 2 个账号
 cx --no-trust                   # 不自动写入项目 trust
 cx --no-bypass                  # 不自动加 bypass 参数
