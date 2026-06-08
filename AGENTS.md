@@ -20,7 +20,7 @@ After every implementation iteration, complete these steps before reporting done
 4. Run the relevant checks, with `npm test` as the default full validation for this repository.
 5. Before committing or pushing to GitHub, bump the package version in `package.json` for the change being shipped.
 6. Commit the intended changes and push them to GitHub with `git push origin <current-branch>`.
-7. Update the local installed version after the push with `npm install -g github:rmqg/codex-cx`, unless the user requests a different local update command.
+7. Update the local installed version after the push with `npm install -g github:rmqg/codex-multi-account`, unless the user requests a different local update command.
 8. If any required command cannot be run, report the skipped command and the concrete reason.
 
 ## Repository Notes

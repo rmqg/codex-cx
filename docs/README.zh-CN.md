@@ -1,10 +1,10 @@
-# codex-cx
+# codex-multi-account
 
-`codex-cx` 是 OpenAI Codex CLI 的账号切换包装器。它适合多个 ChatGPT/Codex 账号分别使用独立 `CODEX_HOME`，同时共享会话和工作状态的本地环境。
+`codex-multi-account` 是 OpenAI Codex CLI 的账号切换包装器。它适合多个 ChatGPT/Codex 账号分别使用独立 `CODEX_HOME`，同时共享会话和工作状态的本地环境。
 
 ## 为什么用本地切号
 
-`codex-cx` 不做模型请求中转，也不替换官方 Codex 协议。它只是为每个账号设置对应的 `CODEX_HOME`，再启动真实的 Codex CLI。
+`codex-multi-account` 不做模型请求中转，也不替换官方 Codex 协议。它只是为每个账号设置对应的 `CODEX_HOME`，再启动真实的 Codex CLI。
 
 相比把请求转到中转服务，这种方式的优点是：
 
@@ -18,16 +18,16 @@
 
 1. 安装 Node.js 18 或更新版本。
 2. 安装 OpenAI Codex CLI，并确认 `codex --version` 可用。
-3. 安装 `codex-cx`：
+3. 安装 `codex-multi-account`：
 
 ```sh
-npm install -g github:rmqg/codex-cx
+npm install -g github:rmqg/codex-multi-account
 ```
 
 已安装过时，用同一条命令更新全局版本：
 
 ```sh
-npm install -g github:rmqg/codex-cx
+npm install -g github:rmqg/codex-multi-account
 ```
 
 4. 决定你要接入多少个账号，记为 `<N>`。创建账号目录并链接共享会话：
@@ -339,6 +339,8 @@ CX_ACCOUNT_HOMES=name=/path,name2=/path2
 CX_API_KEY_MODE=prefer|fallback
 CX_NO_BYPASS=1
 CX_NO_TRUST=1
+CX_COLOR=1|0
+NO_COLOR=1
 CODEX_TRUST_ALL=0
 CX_REAL_CODEX=/path/to/codex
 CX_AUTO_RESUME_GOAL=0
@@ -359,6 +361,8 @@ CX_INTERACTIVE_AUTO_EXEC=1
 默认情况下，`cx` 会在没有显式 sandbox 或 approval 参数时添加 `--dangerously-bypass-approvals-and-sandbox`。可以用 `--no-bypass` 或 `CX_NO_BYPASS=1` 关闭这个默认行为。
 
 默认情况下，`cx` 会把本次启动的当前目录和 `--cd`/`-C` 目标写入所选账号的 `config.toml`，避免多账号自动切换时被目录信任确认打断。可以用 `--no-trust` 或 `CX_NO_TRUST=1` 关闭这个默认行为。
+
+`cx quota` 默认只在 TTY 上输出彩色进度条。`CX_COLOR=1` 可以强制开启颜色，`CX_COLOR=0` 或 `NO_COLOR=1` 可以关闭颜色。
 
 安装 `codex` PATH 包装器后，`CODEX_TRUST_ALL=0` 可以只关闭直接 `codex` 的自动 trust 写入；`CX_NO_TRUST=1` 会同时关闭 `cx` 和直接 `codex` 的自动 trust 写入。`CX_REAL_CODEX` 可以指定包装器要转交的真实 Codex CLI 路径。
 

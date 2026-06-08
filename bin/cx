@@ -12,6 +12,13 @@ const packageVersion = readPackageVersion();
 const weeklySimilarDelta = 5;
 const primarySimilarDelta = 20;
 const quotaBarWidth = 20;
+const ansiColors = {
+  reset: "\x1b[0m",
+  dim: "\x1b[2m",
+  red: "\x1b[31m",
+  yellow: "\x1b[33m",
+  green: "\x1b[32m",
+};
 const rateLimitTextPattern =
   /(?:usage limits?|out of credits|credits_depleted|usage_limit_reached|rate_limit_reached|spend cap|insufficient_quota|requires_payment_method|exceeded your current quota|429|Too Many Requests)/i;
 const rateLimitReasonPattern =
@@ -152,6 +159,7 @@ Environment:
   CX_ACCOUNT_HOMES=/path/a,/path/b              Explicit comma-separated CODEX_HOME list.
   CX_NO_BYPASS=1                                Do not add the bypass flag.
   CX_NO_TRUST=1                                 Do not write project trust for the current workdir.
+  CX_COLOR=1|0                                  Force-enable or disable quota colors.
   CX_AUTO_RESUME_GOAL=0                         Do not reactivate paused/limited goals before resume.
   CX_API_KEY_MODE=prefer|fallback               API-key account selection mode. Default: fallback.
   CX_LIMIT_TIMEOUT_MS=15000                     Rate-limit probe timeout.
@@ -922,13 +930,48 @@ function formatOptionalPercent(value) {
   return Number.isFinite(value) ? `${value}%` : "ERR";
 }
 
-function formatProgressPercent(value, width = quotaBarWidth) {
+function shouldUseColor(stream = process.stderr) {
+  if (process.env.CX_COLOR === "1") {
+    return true;
+  }
+  if (process.env.CX_COLOR === "0" || process.env.NO_COLOR) {
+    return false;
+  }
+  return Boolean(stream.isTTY);
+}
+
+function colorize(text, color, enabled) {
+  if (!enabled || !text) {
+    return text;
+  }
+  return `${ansiColors[color] || ""}${text}${ansiColors.reset}`;
+}
+
+function quotaColor(value) {
   if (!Number.isFinite(value)) {
-    return `[${"?".repeat(width)}] ERR`;
+    return "yellow";
+  }
+  if (value >= 50) {
+    return "green";
+  }
+  if (value >= 20) {
+    return "yellow";
+  }
+  return "red";
+}
+
+function formatProgressPercent(value, width = quotaBarWidth, options = {}) {
+  const colors = options.colors ?? shouldUseColor();
+  if (!Number.isFinite(value)) {
+    return `[${colorize("?".repeat(width), "yellow", colors)}] ${colorize("ERR", "yellow", colors)}`;
   }
   const clamped = Math.max(0, Math.min(100, value));
   const filled = Math.round((clamped / 100) * width);
-  return `[${"#".repeat(filled)}${"-".repeat(width - filled)}] ${formatOptionalPercent(clamped)}`;
+  const color = quotaColor(clamped);
+  return (
+    `[${colorize("#".repeat(filled), color, colors)}${colorize("-".repeat(width - filled), "dim", colors)}] ` +
+    colorize(formatOptionalPercent(clamped), color, colors)
+  );
 }
 
 function printStatus(results) {

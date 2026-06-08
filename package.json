@@ -1,17 +1,17 @@
 {
-  "name": "codex-cx",
-  "version": "0.7.2",
+  "name": "codex-multi-account",
+  "version": "0.8.0",
   "description": "Small account-switching wrappers for the OpenAI Codex CLI.",
   "license": "GPL-3.0-only",
   "author": "rmqg",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rmqg/codex-cx.git"
+    "url": "git+https://github.com/rmqg/codex-multi-account.git"
   },
   "bugs": {
-    "url": "https://github.com/rmqg/codex-cx/issues"
+    "url": "https://github.com/rmqg/codex-multi-account/issues"
   },
-  "homepage": "https://github.com/rmqg/codex-cx#readme",
+  "homepage": "https://github.com/rmqg/codex-multi-account#readme",
   "type": "commonjs",
   "bin": {
     "cx": "./bin/cx",

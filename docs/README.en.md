@@ -1,10 +1,10 @@
-# codex-cx
+# codex-multi-account
 
-`codex-cx` provides account-switching wrappers for the OpenAI Codex CLI. It is meant for local setups where each ChatGPT/Codex account has its own `CODEX_HOME`, while conversation sessions and other workspace state can be shared.
+`codex-multi-account` provides account-switching wrappers for the OpenAI Codex CLI. It is meant for local setups where each ChatGPT/Codex account has its own `CODEX_HOME`, while conversation sessions and other workspace state can be shared.
 
 ## Why Local Switching
 
-`codex-cx` does not proxy model requests or replace the official Codex protocol. It sets the right `CODEX_HOME` for each account and then launches the real Codex CLI.
+`codex-multi-account` does not proxy model requests or replace the official Codex protocol. It sets the right `CODEX_HOME` for each account and then launches the real Codex CLI.
 
 Compared with relay/proxy workflows, this has a few practical advantages:
 
@@ -18,16 +18,16 @@ Compared with relay/proxy workflows, this has a few practical advantages:
 
 1. Install Node.js 18 or newer.
 2. Install the OpenAI Codex CLI and confirm `codex --version` works.
-3. Install `codex-cx`:
+3. Install `codex-multi-account`:
 
 ```sh
-npm install -g github:rmqg/codex-cx
+npm install -g github:rmqg/codex-multi-account
 ```
 
 To update an existing global install, run the same command again:
 
 ```sh
-npm install -g github:rmqg/codex-cx
+npm install -g github:rmqg/codex-multi-account
 ```
 
 4. Decide how many accounts you want to use; call that number `<N>`. Create account homes and shared session links:
@@ -339,6 +339,8 @@ CX_ACCOUNT_HOMES=name=/path,name2=/path2
 CX_API_KEY_MODE=prefer|fallback
 CX_NO_BYPASS=1
 CX_NO_TRUST=1
+CX_COLOR=1|0
+NO_COLOR=1
 CODEX_TRUST_ALL=0
 CX_REAL_CODEX=/path/to/codex
 CX_AUTO_RESUME_GOAL=0
@@ -359,6 +361,8 @@ CX_INTERACTIVE_AUTO_EXEC=1
 By default, `cx` adds `--dangerously-bypass-approvals-and-sandbox` unless a sandbox or approval option is already present. Use `--no-bypass` or `CX_NO_BYPASS=1` to disable that default.
 
 By default, `cx` writes the launch cwd and any `--cd`/`-C` target to the selected account's `config.toml` so account switches are not interrupted by the directory trust prompt. Use `--no-trust` or `CX_NO_TRUST=1` to disable that default.
+
+`cx quota` emits colored progress bars only on TTYs by default. Use `CX_COLOR=1` to force color, or `CX_COLOR=0` / `NO_COLOR=1` to disable color.
 
 After the direct `codex` PATH wrapper is installed, `CODEX_TRUST_ALL=0` disables only the direct `codex` project-trust write. `CX_NO_TRUST=1` disables automatic project-trust writes for both `cx` and direct `codex`. `CX_REAL_CODEX` can point the wrapper at the real Codex CLI binary.
 

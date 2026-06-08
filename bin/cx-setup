@@ -44,7 +44,7 @@ function usage() {
 What it does:
   cx-setup creates account CODEX_HOME directories and links shared workspace
   state from one shared Codex home. It never links or shares auth.json; each
-  account keeps its own login or API-key credentials. codex-cx keeps requests
+  account keeps its own login or API-key credentials. codex-multi-account keeps requests
   on the official Codex CLI path instead of relaying model traffic, so original
   Codex features remain available and account handoff can resume interrupted
   sessions with fewer proxy compatibility issues.

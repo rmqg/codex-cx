@@ -93,7 +93,7 @@ function main() {
     process.exit(code ?? signalExitCode(signal));
   });
   child.on("error", (error) => {
-    console.error(`[codex-cx] failed to launch real codex: ${error.message}`);
+    console.error(`[codex-multi-account] failed to launch real codex: ${error.message}`);
     process.exit(127);
   });
 }
@@ -101,6 +101,6 @@ function main() {
 try {
   main();
 } catch (error) {
-  console.error(`[codex-cx] ${error.message}`);
+  console.error(`[codex-multi-account] ${error.message}`);
   process.exit(1);
 }

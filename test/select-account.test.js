@@ -17,6 +17,7 @@ const {
   retryArgsAfterRateLimit,
   selectResult,
   ensureTrustedProjectsForCodexHome,
+  formatProgressPercent,
   trustedProjectPathsFromCodexArgs,
 } = require("../bin/cx");
 
@@ -344,6 +345,13 @@ function tokenCountWithoutCredits() {
     ),
     true,
   );
+}
+
+{
+  assert.equal(formatProgressPercent(96, 20, { colors: false }), "[###################-] 96%");
+  assert.match(formatProgressPercent(96, 20, { colors: true }), /\x1b\[32m#+\x1b\[0m/);
+  assert.match(formatProgressPercent(10, 20, { colors: true }), /\x1b\[31m#+\x1b\[0m/);
+  assert.match(formatProgressPercent(null, 20, { colors: true }), /\x1b\[33m\?+\x1b\[0m/);
 }
 
 {

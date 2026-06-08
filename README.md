@@ -1,8 +1,8 @@
-# codex-cx
+# codex-multi-account
 
 Small account-switching wrappers for the OpenAI Codex CLI.
 
-`codex-cx` keeps you on the official Codex CLI path while rotating local
+`codex-multi-account` keeps you on the official Codex CLI path while rotating local
 `CODEX_HOME` account directories. Compared with relay/proxy workflows, this
 keeps original Codex features available, reduces compatibility bugs, avoids
 proxy stream instability, and can continue interrupted work seamlessly when an
@@ -16,7 +16,7 @@ account hits usage limits.
 ## Install
 
 ```sh
-npm install -g github:rmqg/codex-cx
+npm install -g github:rmqg/codex-multi-account
 ```
 
 Run the same command again to update an existing global install.
@@ -33,7 +33,7 @@ cx-setup --install-codex-wrapper --force
 cx [codex args...]
 cx --no-trust [codex args...]
 cx status
-cx quota  # multi-line remaining quota bars
+cx quota  # colored multi-line remaining quota bars
 cxa [codex args...]
 cxr [extra resume args...]
 cx-setup [options]
