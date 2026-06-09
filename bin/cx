@@ -180,8 +180,9 @@ Behavior:
   official Codex behavior while adding local account selection and handoff.
   During one auto-switched task, model/profile/reasoning defaults are pinned
   from explicit task args or the first selected account. If the interrupted
-  session records /fast, /slow, or a later turn_context effort, the retry uses
-  that latest task effort instead of the next account's default.
+  session records a later turn_context model/effort or /slow, the retry uses
+  that latest task state. /fast on|off is inherited as service_tier priority|auto
+  instead of being rewritten as a reasoning-effort change.
   By default it writes the current directory and any --cd/-C target to the
   selected account's config.toml as projects."<path>".trust_level="trusted".
   Use --no-trust or CX_NO_TRUST=1 to keep Codex's normal trust prompt.
@@ -1545,6 +1546,28 @@ function hasConfigAssignment(args, key) {
   return false;
 }
 
+function configAssignmentValue(args, key) {
+  let value = "";
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if ((arg === "-c" || arg === "--config") && args[index + 1]) {
+      const assignment = args[index + 1];
+      if (configAssignmentKey(assignment) === key) {
+        value = parseTomlScalarString(assignment.slice(assignment.indexOf("=") + 1));
+      }
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--config=")) {
+      const assignment = arg.slice("--config=".length);
+      if (configAssignmentKey(assignment) === key) {
+        value = parseTomlScalarString(assignment.slice(assignment.indexOf("=") + 1));
+      }
+    }
+  }
+  return value;
+}
+
 function withoutConfigAssignment(args, key) {
   const filtered = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -1566,12 +1589,70 @@ function withoutConfigAssignment(args, key) {
   return filtered;
 }
 
-function withTaskEffortArgs(args, effort) {
-  const normalized = normalizeTaskEffort(effort);
-  if (!normalized) {
-    return args;
+function withoutValueOptions(args, names) {
+  const filtered = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const name = optionName(arg);
+    if (names.has(name)) {
+      if (!arg.includes("=") && index + 1 < args.length) {
+        index += 1;
+      }
+      continue;
+    }
+    filtered.push(arg);
   }
-  return ["-c", `model_reasoning_effort=${JSON.stringify(normalized)}`, ...withoutConfigAssignment(args, "model_reasoning_effort")];
+  return filtered;
+}
+
+function normalizedNonEmptyString(value) {
+  const normalized = String(value || "").trim();
+  return normalized || "";
+}
+
+function serviceTierFromFastMode(fastMode) {
+  if (fastMode === true) {
+    return "priority";
+  }
+  if (fastMode === false) {
+    return "auto";
+  }
+  return "";
+}
+
+function taskFastModeFromArgs(args) {
+  return taskFastModeFromServiceTier(configAssignmentValue(args, "service_tier"));
+}
+
+function applySessionTaskState(args, sessionState) {
+  const prefix = [];
+  let rest = [...args];
+
+  const model = normalizedNonEmptyString(sessionState?.taskModel);
+  if (model) {
+    rest = withoutConfigAssignment(withoutValueOptions(rest, new Set(["-m", "--model"])), "model");
+    prefix.push("--model", model);
+  }
+
+  const profile = normalizedNonEmptyString(sessionState?.taskProfile);
+  if (profile) {
+    rest = withoutConfigAssignment(withoutValueOptions(rest, new Set(["-p", "--profile"])), "profile");
+    prefix.push("--profile", profile);
+  }
+
+  const effort = normalizeTaskEffort(sessionState?.taskEffort);
+  if (effort) {
+    rest = withoutConfigAssignment(rest, "model_reasoning_effort");
+    prefix.push("-c", `model_reasoning_effort=${JSON.stringify(effort)}`);
+  }
+
+  const serviceTier = serviceTierFromFastMode(sessionState?.taskFastMode);
+  if (serviceTier) {
+    rest = withoutConfigAssignment(rest, "service_tier");
+    prefix.push("-c", `service_tier=${JSON.stringify(serviceTier)}`);
+  }
+
+  return prefix.length > 0 ? [...prefix, ...rest] : args;
 }
 
 function shouldPinTaskDefaults(args) {
@@ -1585,7 +1666,10 @@ function taskDefaultArgsFromAccount(account, args) {
     return [];
   }
 
-  const values = readTopLevelTomlStrings(path.join(account.home, "config.toml"), new Set(["model", "profile", "model_reasoning_effort"]));
+  const values = readTopLevelTomlStrings(
+    path.join(account.home, "config.toml"),
+    new Set(["model", "profile", "model_reasoning_effort", "service_tier"]),
+  );
   const pinned = [];
   if (values.model && !hasValueOption(args, new Set(["-m", "--model"])) && !hasConfigAssignment(args, "model")) {
     pinned.push("--model", values.model);
@@ -1595,6 +1679,9 @@ function taskDefaultArgsFromAccount(account, args) {
   }
   if (values.model_reasoning_effort && !hasConfigAssignment(args, "model_reasoning_effort")) {
     pinned.push("-c", `model_reasoning_effort=${JSON.stringify(values.model_reasoning_effort)}`);
+  }
+  if (values.service_tier && !hasConfigAssignment(args, "service_tier")) {
+    pinned.push("-c", `service_tier=${JSON.stringify(values.service_tier)}`);
   }
   return pinned;
 }
@@ -1623,13 +1710,69 @@ function normalizeTaskEffort(value) {
 
 function taskEffortFromSlashText(text) {
   const normalized = String(text || "").trim().toLowerCase();
-  if (/^\/fast(?:\s|$)/u.test(normalized)) {
-    return "low";
-  }
   if (/^\/slow(?:\s|$)/u.test(normalized)) {
     return "xhigh";
   }
   return "";
+}
+
+function normalizeTaskFastMode(value) {
+  if (value === true || value === false) {
+    return value;
+  }
+  const normalized = String(value ?? "").trim().toLowerCase().replace(/_/g, "-");
+  if (!normalized) {
+    return null;
+  }
+  if (["1", "true", "yes", "on", "enable", "enabled", "fast", "priority"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off", "disable", "disabled", "auto", "default", "standard", "standard-only"].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
+function taskFastModeFromServiceTier(value) {
+  const normalized = String(value ?? "").trim().toLowerCase().replace(/_/g, "-");
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "priority" || normalized === "fast") {
+    return true;
+  }
+  if (["auto", "default", "standard", "standard-only"].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
+function firstKnownFastMode(...values) {
+  for (const value of values) {
+    if (value === true || value === false) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function taskStateFromSlashText(text, currentFastMode = null) {
+  const normalized = String(text || "").trim().toLowerCase();
+  const fast = normalized.match(/^\/fast(?:\s+([^\s]+))?(?:\s|$)/u);
+  if (fast) {
+    const mode = fast[1] || "";
+    if (!mode) {
+      return { fastMode: currentFastMode === true ? false : true };
+    }
+    if (mode === "status") {
+      return {};
+    }
+    const fastMode = normalizeTaskFastMode(mode);
+    return fastMode === null ? {} : { fastMode };
+  }
+
+  const effort = taskEffortFromSlashText(normalized);
+  return effort ? { effort, fastMode: false } : {};
 }
 
 function textFromUserPayload(payload) {
@@ -1655,8 +1798,41 @@ function taskEffortFromTurnContext(payload) {
   );
 }
 
-function applySessionTaskState(args, sessionState) {
-  return withTaskEffortArgs(args, sessionState?.taskEffort);
+function taskStateFromTurnContext(payload) {
+  const collaborationMode = payload?.collaboration_mode || payload?.collaborationMode || {};
+  const settings = collaborationMode.settings || {};
+  const modeName = String(collaborationMode.mode || collaborationMode.name || collaborationMode.id || "").trim().toLowerCase();
+  return {
+    model: normalizedNonEmptyString(payload?.model || payload?.model_id || payload?.modelId || settings.model),
+    profile: normalizedNonEmptyString(payload?.profile || settings.profile),
+    effort: taskEffortFromTurnContext(payload),
+    fastMode: firstKnownFastMode(
+      normalizeTaskFastMode(payload?.fast_mode),
+      normalizeTaskFastMode(payload?.fastMode),
+      taskFastModeFromServiceTier(payload?.service_tier),
+      taskFastModeFromServiceTier(payload?.serviceTier),
+      normalizeTaskFastMode(settings.fast_mode),
+      normalizeTaskFastMode(settings.fastMode),
+      taskFastModeFromServiceTier(settings.service_tier),
+      taskFastModeFromServiceTier(settings.serviceTier),
+      modeName === "fast" ? true : null,
+    ),
+  };
+}
+
+function applyTaskContextState(state, taskState) {
+  if (taskState.model) {
+    state.taskModel = taskState.model;
+  }
+  if (taskState.profile) {
+    state.taskProfile = taskState.profile;
+  }
+  if (taskState.effort) {
+    state.taskEffort = taskState.effort;
+  }
+  if (taskState.fastMode === true || taskState.fastMode === false) {
+    state.taskFastMode = taskState.fastMode;
+  }
 }
 
 function filterOptions(args, supportedOptions, valueOptions) {
@@ -1897,7 +2073,10 @@ function latestSessionTurnState(accountHome, options = {}) {
     completed: false,
     lastAgentMessage: null,
     usageLimited: false,
+    taskModel: "",
+    taskProfile: "",
     taskEffort: "",
+    taskFastMode: options.initialTaskFastMode === true || options.initialTaskFastMode === false ? options.initialTaskFastMode : null,
   };
 
   let lines;
@@ -1920,15 +2099,11 @@ function latestSessionTurnState(accountHome, options = {}) {
     }
 
     const payload = event.payload || event;
-    const turnEffort = event.type === "turn_context" ? taskEffortFromTurnContext(payload) : "";
-    if (turnEffort) {
-      state.taskEffort = turnEffort;
+    if (event.type === "turn_context") {
+      applyTaskContextState(state, taskStateFromTurnContext(payload));
     }
 
-    const slashEffort = taskEffortFromSlashText(textFromUserPayload(payload));
-    if (slashEffort) {
-      state.taskEffort = slashEffort;
-    }
+    applyTaskContextState(state, taskStateFromSlashText(textFromUserPayload(payload), state.taskFastMode));
 
     if (event.type === "event_msg" && payload.type === "task_started") {
       state.activeTurn = true;
@@ -2157,7 +2332,11 @@ async function resumeGoalIfNeeded(account, codexArgs) {
 
 function retryPlanAfterRateLimit(previousArgs, accountHome, options = {}) {
   const analysis = analyzeCodexArgs(previousArgs);
-  const sessionState = latestSessionTurnState(accountHome, { ...options, assumeUsageLimited: true });
+  const sessionState = latestSessionTurnState(accountHome, {
+    ...options,
+    assumeUsageLimited: true,
+    initialTaskFastMode: taskFastModeFromArgs(previousArgs),
+  });
 
   if (!sessionState.file) {
     return { args: [...previousArgs], session: null };

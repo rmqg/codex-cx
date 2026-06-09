@@ -92,12 +92,24 @@ function taskStarted() {
   return { type: "event_msg", payload: { type: "task_started", turn_id: "turn-1" } };
 }
 
-function turnContext(effort) {
+function turnContext(effort, options = {}) {
   return {
     type: "turn_context",
     payload: {
       effort,
-      collaboration_mode: { settings: { reasoning_effort: effort } },
+      model: options.model,
+      profile: options.profile,
+      service_tier: options.serviceTier,
+      fastMode: options.fastMode,
+      collaboration_mode: {
+        settings: {
+          reasoning_effort: effort,
+          model: options.model,
+          profile: options.profile,
+          service_tier: options.serviceTier,
+          fastMode: options.fastMode,
+        },
+      },
     },
   };
 }
@@ -163,6 +175,7 @@ function tokenCountWithoutCredits() {
       'model = "gpt-fast"',
       'profile = "fast"',
       'model_reasoning_effort = "low"',
+      'service_tier = "priority"',
       "",
       "[projects.\"/tmp/project\"]",
       'trust_level = "trusted"',
@@ -177,16 +190,40 @@ function tokenCountWithoutCredits() {
     "fast",
     "-c",
     'model_reasoning_effort="low"',
+    "-c",
+    'service_tier="priority"',
     "exec",
     "ship feature",
   ]);
   assert.deepEqual(
     pinTaskDefaultsFromAccount(
-      ["--model", "gpt-5", "--profile", "deep", "-c", 'model_reasoning_effort="high"', "exec", "ship feature"],
+      [
+        "--model",
+        "gpt-5",
+        "--profile",
+        "deep",
+        "-c",
+        'model_reasoning_effort="high"',
+        "-c",
+        'service_tier="auto"',
+        "exec",
+        "ship feature",
+      ],
       { home: accountHome },
     ),
-    ["--model", "gpt-5", "--profile", "deep", "-c", 'model_reasoning_effort="high"', "exec", "ship feature"],
-    "explicit task model/profile/effort win over account defaults",
+    [
+      "--model",
+      "gpt-5",
+      "--profile",
+      "deep",
+      "-c",
+      'model_reasoning_effort="high"',
+      "-c",
+      'service_tier="auto"',
+      "exec",
+      "ship feature",
+    ],
+    "explicit task model/profile/effort/service tier win over account defaults",
   );
   assert.deepEqual(
     pinTaskDefaultsFromAccount(["login"], { home: accountHome }),
@@ -201,12 +238,83 @@ function tokenCountWithoutCredits() {
   const accountHome = tempAccountHome();
   writeSession(accountHome, [turnContext("xhigh"), taskStarted(), userMessage("/fast"), userMessage("finish it")]);
 
-  const retryArgs = retryArgsAfterRateLimit(["-c", 'model_reasoning_effort="xhigh"', "exec", "finish it"], accountHome, {
-    minMtimeMs: Date.now() - 1000,
-  });
+  const retryArgs = retryArgsAfterRateLimit(
+    ["-c", 'model_reasoning_effort="xhigh"', "-c", 'service_tier="auto"', "exec", "finish it"],
+    accountHome,
+    {
+      minMtimeMs: Date.now() - 1000,
+    },
+  );
 
-  assert.deepEqual(retryArgs.slice(0, 2), ["-c", 'model_reasoning_effort="low"']);
-  assert.equal(retryArgs.includes('model_reasoning_effort="xhigh"'), false);
+  assert.ok(retryArgs.includes('model_reasoning_effort="xhigh"'));
+  assert.ok(retryArgs.includes('service_tier="priority"'));
+  assert.equal(retryArgs.includes('service_tier="auto"'), false);
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [turnContext("xhigh"), taskStarted(), userMessage("/fast off"), userMessage("finish it")]);
+
+  const retryArgs = retryArgsAfterRateLimit(
+    ["-c", 'model_reasoning_effort="xhigh"', "-c", 'service_tier="priority"', "exec", "finish it"],
+    accountHome,
+    {
+      minMtimeMs: Date.now() - 1000,
+    },
+  );
+
+  assert.ok(retryArgs.includes('model_reasoning_effort="xhigh"'));
+  assert.ok(retryArgs.includes('service_tier="auto"'));
+  assert.equal(retryArgs.includes('service_tier="priority"'), false);
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [turnContext("xhigh"), taskStarted(), userMessage("/fast"), userMessage("finish it")]);
+
+  const retryArgs = retryArgsAfterRateLimit(
+    ["-c", 'model_reasoning_effort="xhigh"', "-c", 'service_tier="priority"', "exec", "finish it"],
+    accountHome,
+    {
+      minMtimeMs: Date.now() - 1000,
+    },
+  );
+
+  assert.ok(retryArgs.includes('model_reasoning_effort="xhigh"'));
+  assert.ok(retryArgs.includes('service_tier="auto"'));
+  assert.equal(retryArgs.includes('service_tier="priority"'), false);
+  assert.match(retryArgs.at(-1), /Continue the interrupted task/);
+
+  fs.rmSync(accountHome, { recursive: true, force: true });
+}
+
+{
+  const accountHome = tempAccountHome();
+  writeSession(accountHome, [
+    turnContext("high", { model: "gpt-session", profile: "focused" }),
+    taskStarted(),
+    userMessage("inherit the active task model"),
+  ]);
+
+  const retryArgs = retryArgsAfterRateLimit(
+    ["--model", "gpt-old", "--profile", "old", "-c", 'model_reasoning_effort="low"', "exec", "inherit model"],
+    accountHome,
+    {
+      minMtimeMs: Date.now() - 1000,
+    },
+  );
+
+  assert.equal(retryArgs[retryArgs.indexOf("--model") + 1], "gpt-session");
+  assert.equal(retryArgs[retryArgs.indexOf("--profile") + 1], "focused");
+  assert.ok(retryArgs.includes('model_reasoning_effort="high"'));
+  assert.equal(retryArgs.includes("gpt-old"), false);
+  assert.equal(retryArgs.includes('model_reasoning_effort="low"'), false);
   assert.match(retryArgs.at(-1), /Continue the interrupted task/);
 
   fs.rmSync(accountHome, { recursive: true, force: true });

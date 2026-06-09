@@ -107,8 +107,9 @@ cx quota
 cxa
 ```
 
-一次任务开始后，模型、profile 和 reasoning 档位会跟着这次任务走，不会因为切到另一个账号就变成另一个账号的默认档位。
-如果你在任务中用 `/fast` 或 `/slow` 改了档位，自动切号续跑会读取中断会话里的最新档位继续。
+一次任务开始后，模型、profile、reasoning 档位和 service tier 会跟着这次任务走，不会因为切到另一个账号就变成另一个账号的默认档位。
+如果你在任务中用 `/fast`、`/fast on` 或 `/fast off`，自动切号续跑会继承这个 service-tier 状态，不会把 reasoning 档位改成低档。
+如果中断会话记录了更新的 reasoning 档位，例如 `/slow` 或 turn context 里的值，自动续跑也会继续沿用这个 reasoning 档位。
 
 执行一次非交互任务：
 

@@ -107,8 +107,9 @@ Start Codex with automatic account selection:
 cxa
 ```
 
-After one task starts, model, profile, and reasoning effort stay with that task instead of changing to the next account's defaults.
-If you use `/fast` or `/slow` during the task, automatic handoff reads the latest effort from the interrupted session and continues with it.
+After one task starts, model, profile, reasoning effort, and service tier stay with that task instead of changing to the next account's defaults.
+If you use `/fast`, `/fast on`, or `/fast off` during the task, automatic handoff inherits that service-tier state instead of lowering reasoning effort.
+If the interrupted session records a later reasoning effort, for example from `/slow` or turn context, automatic handoff keeps that reasoning effort too.
 
 Run a one-shot task:
 

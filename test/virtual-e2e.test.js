@@ -479,8 +479,8 @@ function runVirtualE2e() {
 
   const account1Config = path.join(root, ".codex-account1", "config.toml");
   const account3Config = path.join(root, ".codex-account3", "config.toml");
-  fs.writeFileSync(account1Config, 'model = "gpt-fast"\nmodel_reasoning_effort = "low"\n');
-  fs.writeFileSync(account3Config, 'model = "gpt-slow"\nmodel_reasoning_effort = "high"\n');
+  fs.writeFileSync(account1Config, 'model = "gpt-fast"\nmodel_reasoning_effort = "low"\nservice_tier = "priority"\n');
+  fs.writeFileSync(account3Config, 'model = "gpt-slow"\nmodel_reasoning_effort = "high"\nservice_tier = "auto"\n');
   clearRecords();
   ok("cxa", ["exec", "task defaults stay pinned"], {
     FAKE_LIMIT_ACCOUNT: ".codex-account1",
@@ -490,10 +490,13 @@ function runVirtualE2e() {
   assert.equal(runs.length, 2, JSON.stringify(runs));
   assert.equal(runs[0].args[runs[0].args.indexOf("--model") + 1], "gpt-fast");
   assert.ok(runs[0].args.includes('model_reasoning_effort="low"'));
+  assert.ok(runs[0].args.includes('service_tier="priority"'));
   assert.equal(runs[1].args[runs[1].args.indexOf("--model") + 1], "gpt-fast");
   assert.ok(runs[1].args.includes('model_reasoning_effort="low"'));
+  assert.ok(runs[1].args.includes('service_tier="priority"'));
   assert.equal(runs[1].args.includes("gpt-slow"), false);
   assert.equal(runs[1].args.includes('model_reasoning_effort="high"'), false);
+  assert.equal(runs[1].args.includes('service_tier="auto"'), false);
   fs.rmSync(account1Config, { force: true });
   fs.rmSync(account3Config, { force: true });
 
@@ -508,8 +511,8 @@ function runVirtualE2e() {
   assert.equal(runs.length, 2, JSON.stringify(runs));
   assert.ok(runs[0].args.includes('model_reasoning_effort="xhigh"'));
   assert.equal(runs[1].args[runs[1].args.indexOf("--model") + 1], "gpt-fast");
-  assert.ok(runs[1].args.includes('model_reasoning_effort="low"'));
-  assert.equal(runs[1].args.includes('model_reasoning_effort="xhigh"'), false);
+  assert.ok(runs[1].args.includes('model_reasoning_effort="xhigh"'));
+  assert.ok(runs[1].args.includes('service_tier="priority"'));
   fs.rmSync(account1Config, { force: true });
 
   clearRecords();
