@@ -212,18 +212,16 @@ function parseArgs(argv) {
       usage();
       process.exit(0);
     }
-    if (arg === "auto" || arg === "--auto" || arg === "--auto-switch") {
+    if ((arg === "auto" && codexArgs.length === 0) || arg === "--auto" || arg === "--auto-switch") {
       options.auto = true;
       continue;
     }
-    if (arg === "status" || arg === "--status") {
+    if ((arg === "status" && codexArgs.length === 0) || arg === "--status") {
       options.status = true;
       continue;
     }
     if (
-      arg === "quota" ||
-      arg === "limits" ||
-      arg === "remaining" ||
+      ((arg === "quota" || arg === "limits" || arg === "remaining") && codexArgs.length === 0) ||
       arg === "--quota" ||
       arg === "--limits" ||
       arg === "--remaining"
@@ -774,10 +772,15 @@ function appServerRequest(accountHome, method, params, options = {}) {
     }
 
     function send(message) {
-      child.stdin.write(`${JSON.stringify(message)}\n`);
+      try {
+        child.stdin.write(`${JSON.stringify(message)}\n`);
+      } catch (error) {
+        finish(error);
+      }
     }
 
     child.on("error", (error) => finish(error));
+    child.stdin.on("error", (error) => finish(error));
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
       if (stderr.length > 4000) {
