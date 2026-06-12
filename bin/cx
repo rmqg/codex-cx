@@ -2407,6 +2407,14 @@ function installSignalForwarding() {
   }
 }
 
+function removeDirQuietly(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Best-effort cleanup; the OS clears tmpfs on reboot anyway.
+  }
+}
+
 function restoreTerminal() {
   if (process.stdout.isTTY) {
     process.stdout.write("\x1b[?1049l\x1b[?25h\x1b[0m\n");
@@ -2601,6 +2609,7 @@ async function runAuto(options, initialArgs) {
 
     if (options.dryRun) {
       console.error(`CODEX_HOME=${selected.account.home} codex ${commandArgs.map(shellQuote).join(" ")}`);
+      removeDirQuietly(logDir);
       return 0;
     }
 
@@ -2610,7 +2619,12 @@ async function runAuto(options, initialArgs) {
     ensureRetrySessionAvailable(pendingRetrySession, selected.account);
     await resumeGoalIfNeeded(selected.account, codexArgs);
     const runStartedAt = Date.now() - 2000;
-    const result = await runCodexMonitored(selected.account, commandArgs, logDir);
+    let result;
+    try {
+      result = await runCodexMonitored(selected.account, commandArgs, logDir);
+    } finally {
+      removeDirQuietly(logDir);
+    }
     if (terminating) {
       return result.code ?? 130;
     }
